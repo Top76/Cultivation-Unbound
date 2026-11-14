@@ -536,9 +536,7 @@ do
             Vector3.new(-350, 140, 2200),
             Vector3.new(900, 130, 2100),
             Vector3.new(-2800, 150, -2100),
-            Vector3.new(2500, 1500, 1000),
-            Vector3.new(-1150, 35, -1700),
-            Vector3.new(1300, 55, 140)
+            Vector3.new(2500, 1500, 1000)
         }
     }
 
@@ -667,10 +665,11 @@ do
     end
 end
 
--- 2. ระบบ Events Listeners, Perfect Stoke, Auto Alchemy Exam Solver (ตรงโครงสร้าง HerbModule.Herbs / PillModule.Pills 100%)
+-- 2. ระบบ Events Listeners, Perfect Stoke, Auto Alchemy Exam Solver
 do
     local Env = Hub.Env
     local State = Hub.State
+    local Config = Hub.Config
     local UI = Hub.UI
 
     function Hub.Fn.solveAlchemyQuiz(qData)
@@ -709,9 +708,6 @@ do
             return nil
         end
 
-        -- 1. ข้อสอบรูปภาพสมุนไพร ("Which herb is this?")
-        -- หมายเหตุ: imageId ของ herb id 1..5 ซ้ำกับ id 11..15 (Spirit) และ 16..21 (Alchemy)
-        -- ดังนั้นต้องเช็กเฉพาะตัวที่ชื่ออยู่ใน options โดยเช็ก id 1..5 ก่อนเสมอ!
         if qData.image and type(herbs) == "table" then
             local targetImg = tostring(qData.image)
             local imgNum = targetImg:match("(%d+)")
@@ -742,7 +738,6 @@ do
             end
         end
 
-        -- 2. ข้อสอบถามชื่อยาจากสูตร ("... brews which pill?")
         if text:find("brews which pill%?") and type(pills) == "table" and type(herbs) == "table" then
             local recipePart = text:match("^(.-)%s+brews which pill%?$")
             if recipePart then
@@ -785,7 +780,6 @@ do
             end
         end
 
-        -- 3. ข้อสอบถามส่วนผสมของยา ("Which herb goes into the ...?")
         if text:find("Which herb goes into the ") and type(pills) == "table" and type(herbs) == "table" then
             local pillName = text:match("^Which herb goes into the (.-)%?$")
             if pillName then
@@ -805,7 +799,6 @@ do
             end
         end
 
-        -- 4. ข้อสอบถามอายุสมุนไพร ("Which herbs brew the strongest pills?" / "Three ... herbs always brew a pill of which tier?")
         if text == "Which herbs brew the strongest pills?" then
             if type(yearTiers) == "table" and #yearTiers > 0 and type(yearTiers[#yearTiers]) == "table" and yearTiers[#yearTiers].label then
                 local idx = findOption(yearTiers[#yearTiers].label)
@@ -828,7 +821,6 @@ do
             end
         end
 
-        -- 5. ข้อสอบถามแหล่งเกิดของสมุนไพร ("Where does the ... grow?")
         if text:find("Where does the ") and type(herbs) == "table" then
             local herbName = text:match("^Where does the (.-) grow%?$")
             if herbName then
@@ -844,7 +836,6 @@ do
             end
         end
 
-        -- 6. ข้อสอบสมุนไพรวิญญาณ ("Who can pick spirit herbs?" / "Which of these is a spirit herb?")
         if text == "Who can pick spirit herbs?" then
             local idx = findOption("Only a soul in the spirit world")
             if idx then
@@ -863,7 +854,6 @@ do
             end
         end
 
-        -- 7. ข้อสอบถามขั้นนักปรุงยา ("Which alchemist can first brew the ...?")
         if text:find("Which alchemist can first brew the ") and type(pills) == "table" then
             local pillName = text:match("^Which alchemist can first brew the (.-)%?$")
             if pillName then
@@ -1349,11 +1339,6 @@ do
             end
         end
 
-        local wbFolder = Hub.Fn.getWorldBossFolder()
-        if wbFolder and typeof(wbFolder:GetAttribute("Centre")) == "Vector3" then
-            addPoint(wbFolder:GetAttribute("Centre"))
-        end
-
         local anchors = workspace:FindFirstChild("MapAnchors")
         if anchors then
             for _, child in ipairs(anchors:GetDescendants()) do
@@ -1377,7 +1362,7 @@ do
             end
         end
 
-        for _, pos in ipairs(Hub.Config.fallbackZones) do
+        for _, pos in ipairs(Config.fallbackZones) do
             addPoint(pos)
         end
 
@@ -1870,7 +1855,7 @@ do
     end
 end
 
--- 4. ระบบ Cultivation, Soul Cultivation, Runaway Herbs และ Alchemy (เฉพาะสูตรตรงตามตำรา)
+-- 4. ระบบ Cultivation, Soul Cultivation, Herbs (ตรรกะ V26 + ไล่จับโบนัส x2) และ Alchemy
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -2159,25 +2144,23 @@ do
         end
     end
 
+    -- ยกฟังก์ชัน getBestHerbTarget ของ V26 กลับมาทั้งหมด (รวม workspace.HerbSpots)
     local function getBestHerbTarget(fromPos)
         initHerbCache()
         local spiritWorld = workspace:FindFirstChild("SpiritWorld")
+        local herbSpots = workspace:FindFirstChild("HerbSpots")
         local now = os.clock()
         local only1000Yr = (State.herbModeIndex == 2)
         local candidates, seenParts = {}, {}
 
-        local function evaluatePrompt(prompt)
-            if not prompt or not prompt.Parent or not prompt.Enabled then
-                return
-            end
-            local part = prompt.Parent
-            if not part:IsA("BasePart") or seenParts[part] then
+        local function evaluatePart(part, prompt)
+            if seenParts[part] or not part or not part.Parent then
                 return
             end
             if spiritWorld and part:IsDescendantOf(spiritWorld) then
                 return
             end
-            if part:GetAttribute("Picked") == true then
+            if prompt and not prompt.Enabled then
                 return
             end
             seenParts[part] = true
@@ -2200,9 +2183,22 @@ do
             table.insert(candidates, { part = part, prompt = prompt, dist = dist, year = herbYear })
         end
 
+        if herbSpots then
+            for _, spot in ipairs(herbSpots:GetChildren()) do
+                if spot:IsA("BasePart") then
+                    evaluatePart(spot, spot:FindFirstChildOfClass("ProximityPrompt"))
+                end
+            end
+        end
+
         for prompt in pairs(Env.cachedHerbPrompts) do
             if prompt and prompt.Parent then
-                evaluatePrompt(prompt)
+                if prompt.Enabled then
+                    local part = prompt.Parent
+                    if part:IsA("BasePart") then
+                        evaluatePart(part, prompt)
+                    end
+                end
             else
                 Env.cachedHerbPrompts[prompt] = nil
             end
@@ -2228,9 +2224,10 @@ do
         return best.part, best.prompt, best.dist, best.year
     end
 
+    -- ยกลูป startFarmLoop ของ V26 กลับมา + คงระบบไล่จับสมุนไพรวิ่งหนี x2
     function Hub.Fn.startFarmLoop()
         initHerbCache()
-        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร...")
+        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (V26 Logic + Chase x2)...")
         while State.isFarming do
             if Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                 task.wait(0.5)
@@ -2240,21 +2237,19 @@ do
                     local herbPart, prompt, _, herbYear = getBestHerbTarget(hrp.Position)
 
                     if herbPart and herbPart.Parent then
-                        Env.collectedCooldowns[herbPart] = os.clock() + 20
                         Hub.Fn.logDebug("พบเป้าหมาย: " .. herbPart.Name .. " (" .. tostring(herbYear) .. "Yr)")
-
                         local initialPos = herbPart.Position
-                        local standCFrame = herbPart.CFrame * CFrame.new(0, 1.8, 1.8)
+                        local standCFrame = herbPart.CFrame * CFrame.new(0, 1.5, 1.8)
                         Hub.Fn.safeTeleport(hrp, standCFrame, herbPart)
-                        Env.groundPlatform.CFrame = standCFrame * CFrame.new(0, -3.5, 0)
+                        Env.groundPlatform.CFrame = standCFrame * CFrame.new(0, -3.2, 0)
 
                         if not prompt then
                             prompt = herbPart:FindFirstChildOfClass("ProximityPrompt")
                         end
 
-                        if State.isFarming and herbPart.Parent and prompt and prompt.Enabled then
+                        if State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) then
                             local beforeCollect = Env.lastHerbCollectedAt
-                            if fireproximityprompt then
+                            if prompt and fireproximityprompt then
                                 pcall(fireproximityprompt, prompt)
                             end
                             if Env.Remotes.CollectHerb then
@@ -2262,76 +2257,79 @@ do
                             end
 
                             local waitStart = os.clock()
-                            while State.isFarming and herbPart.Parent and prompt.Enabled and Env.lastHerbCollectedAt == beforeCollect and (os.clock() - waitStart) < 0.35 do
-                                task.wait(0.04)
+                            while State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) and Env.lastHerbCollectedAt == beforeCollect and (os.clock() - waitStart) < 0.25 do
+                                task.wait(0.03)
                             end
 
-                            if herbPart.Parent and (herbPart.Position - initialPos).Magnitude > 2 then
+                            -- เช็กกรณีสมุนไพรวิ่งหนี (ถ้าตำแหน่งขยับจากจุดเดิม)
+                            if herbPart.Parent and (herbPart.Position - initialPos).Magnitude > 1.5 and (not prompt or prompt.Enabled) then
                                 Hub.Fn.logDebug("🏃 สมุนไพรวิ่งหนี! กำลังไล่จับโบนัส x2...")
                                 local chaseDeadline = os.clock() + 10
-                                while State.isFarming and herbPart.Parent and prompt.Enabled and os.clock() < chaseDeadline do
-                                    local chaseCF = herbPart.CFrame * CFrame.new(0, 1.8, 1.5)
+                                while State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) and os.clock() < chaseDeadline do
+                                    local chaseCF = herbPart.CFrame * CFrame.new(0, 1.5, 1.5)
                                     Hub.Fn.safeTeleport(hrp, chaseCF, herbPart)
-                                    Env.groundPlatform.CFrame = chaseCF * CFrame.new(0, -3.5, 0)
-                                    if fireproximityprompt then
+                                    Env.groundPlatform.CFrame = chaseCF * CFrame.new(0, -3.2, 0)
+                                    if prompt and fireproximityprompt then
                                         pcall(fireproximityprompt, prompt)
                                     end
                                     if Env.Remotes.CollectHerb then
                                         Env.Remotes.CollectHerb:FireServer(herbPart)
                                     end
-                                    if firetouchinterest then
-                                        pcall(function()
-                                            firetouchinterest(hrp, herbPart, 0)
-                                            firetouchinterest(hrp, herbPart, 1)
-                                        end)
+                                    if Env.lastHerbCollectedAt > beforeCollect then
+                                        break
                                     end
                                     task.wait(0.08)
                                 end
                             end
 
-                            if (not herbPart.Parent) or (not prompt.Enabled) or (Env.lastHerbCollectedAt > beforeCollect) then
-                                Env.collectedCooldowns[herbPart] = os.clock() + 60
+                            local collected = (not herbPart.Parent) or (prompt and not prompt.Enabled) or (Env.lastHerbCollectedAt > beforeCollect)
+                            if collected then
+                                Env.collectedCooldowns[herbPart] = os.clock() + 30
                                 Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name)
                             end
                         end
                     else
-                        local streamPoints = Hub.Fn.getDynamicStreamPoints()
-                        if Env.zoneIndex > #streamPoints then
-                            Env.zoneIndex = 1
-                        end
-                        local center = streamPoints[Env.zoneIndex] or Vector3.new(0, 120, 0)
-                        Env.patrolAngle = Env.patrolAngle + (math.pi / 3)
-                        if Env.patrolAngle >= math.pi * 2 then
-                            Env.patrolAngle = 0
-                            Env.zoneIndex = (Env.zoneIndex % math.max(1, #streamPoints)) + 1
-                        end
-
-                        local nextPos = Vector3.new(center.X + math.cos(Env.patrolAngle) * 450, center.Y + 25, center.Z + math.sin(Env.patrolAngle) * 450)
-                        pcall(function()
-                            workspace:RequestStreamAroundAsync(nextPos)
-                        end)
-
-                        local startPos = hrp.Position
-                        local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
-
-                        for i = 1, steps do
-                            if not State.isFarming or Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
-                                break
+                        if State.isDynamicStream and State.herbModeIndex == 2 then
+                            task.wait(0.3)
+                        else
+                            local streamPoints = Hub.Fn.getDynamicStreamPoints()
+                            if Env.zoneIndex > #streamPoints then
+                                Env.zoneIndex = 1
                             end
-                            if getBestHerbTarget(hrp.Position) then
-                                break
+                            local center = streamPoints[Env.zoneIndex] or Vector3.new(0, 120, 0)
+                            Env.patrolAngle = Env.patrolAngle + (math.pi / 3)
+                            if Env.patrolAngle >= math.pi * 2 then
+                                Env.patrolAngle = 0
+                                Env.zoneIndex = (Env.zoneIndex % math.max(1, #streamPoints)) + 1
                             end
-                            local stepCFrame = CFrame.new(startPos:Lerp(nextPos, i / steps))
-                            Env.groundPlatform.CFrame = stepCFrame * CFrame.new(0, -3.5, 0)
-                            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                            hrp.CFrame = stepCFrame
-                            task.wait(0.10)
+
+                            local nextPos = Vector3.new(center.X + math.cos(Env.patrolAngle) * 450, center.Y + 25, center.Z + math.sin(Env.patrolAngle) * 450)
+                            pcall(function()
+                                workspace:RequestStreamAroundAsync(nextPos)
+                            end)
+
+                            local startPos = hrp.Position
+                            local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
+
+                            for i = 1, steps do
+                                if not State.isFarming or Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
+                                    break
+                                end
+                                if getBestHerbTarget(hrp.Position) then
+                                    break
+                                end
+                                local stepCFrame = CFrame.new(startPos:Lerp(nextPos, i / steps))
+                                Env.groundPlatform.CFrame = stepCFrame * CFrame.new(0, -3.2, 0)
+                                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                hrp.CFrame = stepCFrame
+                                task.wait(0.10)
+                            end
                         end
                     end
                 else
                     task.wait(0.3)
                 end
-                task.wait(0.05)
+                task.wait(0.03)
             end
         end
         Hub.Fn.logDebug("หยุดเก็บสมุนไพรแล้ว")
@@ -2488,7 +2486,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V34 (Fixed Quiz DB)"
+    TitleLabel.Text = "Murim Hub V35 (V26 Herbs + Exam)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -2602,7 +2600,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V34 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V35 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2763,7 +2761,7 @@ do
     local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 25)
     local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 26)
 
-    createCategoryHeader("🌿 GATHERING (จับสมุนไพรวิ่งหนี x2)", 27)
+    createCategoryHeader("🌿 GATHERING (V26 LOGIC + CHASE x2)", 27)
     local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Smart All-Map + Chase x2)", Color3.fromRGB(40, 160, 80), 28)
     local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 29)
     local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 30)
@@ -2963,5 +2961,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V34! (แก้ระบบเฉลยข้อสอบตามโครงสร้าง HerbModule.Herbs / PillModule.Pills 100%)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V35! (คืนระบบเก็บสมุนไพร V26 เต็มรูปแบบ + Chase x2 + Exam)")
 end
