@@ -401,12 +401,15 @@ do
             end
         end
 
-        if flatDist <= 180 then
+        -- ระยะไม่เกิน 38 Studs อยู่ในค่าเผื่อ SLACK = 40 ของ MovementGuardRules
+        if flatDist <= 38 then
             applyCFrame(targetCFrame)
             return true
         end
 
-        local steps = math.ceil(flatDist / 32)
+        -- เคลื่อนที่ด้วยความเร็ว ~360 Studs/วินาที (ต่ำกว่า MAX_FLAT_SPEED = 400)
+        local stepDist = 36
+        local steps = math.ceil(flatDist / stepDist)
         local rotOnly = targetCFrame - targetCFrame.Position
 
         for i = 1, steps do
@@ -554,7 +557,7 @@ do
                 local hrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
                 if hum and hum.Health > 0 and hrp then
                     local distFromCentre = (hrp.Position - centrePos).Magnitude
-                    if distFromCentre <= 140 then
+                    if distFromCentre <= 150 then
                         local isEnemy = (enemyFighterName and obj.Name == enemyFighterName)
                         if isEnemy and distFromCentre < bestDist then
                             bestDist = distFromCentre
@@ -577,7 +580,7 @@ do
                 local char, hrp, hum = Hub.Fn.getCharacter()
                 if char and hrp and hum and hum.Health > 0 then
                     local distToCentre = (hrp.Position - Env.ActiveMapEvent.centre).Magnitude
-                    local joinRange = 120
+                    local joinRange = 145
 
                     if not Env.ActiveMapEvent.side or distToCentre > joinRange then
                         if UI.EventStatusLabel then
@@ -627,7 +630,7 @@ do
     end
 end
 
--- 3. ระบบสแกนและฟาร์มมอนสเตอร์
+-- 3. ระบบสแกนและฟาร์มมอนสเตอร์ (รองรับตีกลุ่มพร้อมกันตาม MovementGuardRules)
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -850,39 +853,44 @@ do
 
     function Hub.Fn.startMobFarmLoop()
         local nextTargetUI, nextToolAction = 0, 0
-        local aoeMobs, aoeCursor, nextAoERefresh = {}, 1, 0
+        local clusterMobs, clusterCursor, nextClusterRefresh = {}, 1, 0
+        local expandedParts = {}
 
-        local function hitAoEBatch(primaryModel)
-            if not State.isAoEHit or not Env.Remotes.CombatHit then
-                return
-            end
-            local now = os.clock()
-            if now >= nextAoERefresh then
-                aoeMobs = getTargetMonsters()
-                nextAoERefresh = now + 0.75
-            end
-            local count = #aoeMobs
-            if count == 0 then
-                return
-            end
-            local sent, checked = 0, 0
-            local scanLimit = math.min(count, 8)
-            while State.isFarmingMob and State.isAoEHit and sent < 2 and checked < scanLimit do
-                if aoeCursor > count then
-                    aoeCursor = 1
-                end
-                local otherMob = aoeMobs[aoeCursor]
-                aoeCursor = aoeCursor + 1
-                checked = checked + 1
-                if isValidFarmTarget(otherMob) and otherMob.model ~= primaryModel then
-                    Env.Remotes.CombatHit:FireServer(otherMob.model, 1)
-                    sent = sent + 1
+        local function resetHitboxes()
+            for part, origSize in pairs(expandedParts) do
+                if part and part.Parent then
+                    pcall(function()
+                        part.Size = origSize
+                        part.Transparency = 1
+                    end)
                 end
             end
+            expandedParts = {}
+        end
+
+        local function getGroupAround(centerPos, allMobs)
+            local group = {}
+            for _, m in ipairs(allMobs) do
+                -- จำกัดรัศมีกลุ่มที่ 38 Studs เพื่อให้อยู่ในค่า SLACK = 40 ของ MovementGuardRules
+                if isValidFarmTarget(m) and (m.hrp.Position - centerPos).Magnitude <= 38 then
+                    table.insert(group, m)
+                    if State.isAoEHit then
+                        if not expandedParts[m.hrp] then
+                            expandedParts[m.hrp] = m.hrp.Size
+                        end
+                        pcall(function()
+                            m.hrp.Size = Vector3.new(25, 25, 25)
+                            m.hrp.CanCollide = false
+                        end)
+                    end
+                end
+            end
+            return group
         end
 
         while State.isFarmingMob do
             if State.isAutoMapEvent and Env.ActiveMapEvent then
+                resetHitboxes()
                 task.wait(0.5)
             else
                 local _, playerRoot, playerHumanoid = Hub.Fn.getCharacter()
@@ -891,63 +899,90 @@ do
                         UI.TargetHPLabel.Text = "🎯 รอตัวละครเกิดใหม่..."
                         UI.TargetHPLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
                     end
+                    task.wait(0.3)
                 else
-                    local mobs = getTargetMonsters()
-                    if #mobs > 0 then
-                        for _, target in ipairs(mobs) do
-                            if not State.isFarmingMob or (State.isAutoMapEvent and Env.ActiveMapEvent) then
+                    local allMobs = getTargetMonsters()
+                    if #allMobs > 0 then
+                        table.sort(allMobs, function(a, b)
+                            return (a.hrp.Position - playerRoot.Position).Magnitude < (b.hrp.Position - playerRoot.Position).Magnitude
+                        end)
+                        local anchorMob = allMobs[1]
+
+                        while State.isFarmingMob and isValidFarmTarget(anchorMob) and not (State.isAutoMapEvent and Env.ActiveMapEvent) do
+                            local char, hrp, humanoid = Hub.Fn.getCharacter()
+                            if not char or not humanoid or humanoid.Health <= 0 then
                                 break
                             end
-                            while State.isFarmingMob and isValidFarmTarget(target) and not (State.isAutoMapEvent and Env.ActiveMapEvent) do
-                                local char, hrp, humanoid = Hub.Fn.getCharacter()
-                                if not char or not humanoid or humanoid.Health <= 0 then
-                                    break
-                                end
 
-                                local now = os.clock()
-                                if UI.TargetHPLabel and now >= nextTargetUI then
-                                    nextTargetUI = now + 0.1
-                                    local curHP = math.floor(target.hum.Health)
-                                    local maxHP = math.floor(target.hum.MaxHealth)
-                                    local pct = maxHP > 0 and math.floor((curHP / maxHP) * 100) or 0
-                                    UI.TargetHPLabel.Text = "🎯 " .. target.model.Name .. ": " .. curHP .. "/" .. maxHP .. " (" .. pct .. "%)"
-                                    UI.TargetHPLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
-                                end
-
-                                Hub.Fn.safeTeleport(hrp, target.hrp.CFrame * CFrame.new(State.currentOffset), target.hrp)
-                                if not State.isFarmingMob or not isValidFarmTarget(target) then
-                                    break
-                                end
-
-                                if Env.Remotes.CombatHit then
-                                    Env.Remotes.CombatHit:FireServer(target.model, 1)
-                                    if State.isTurboAttack then
-                                        Env.Remotes.CombatHit:FireServer(target.model, 1)
-                                    end
-                                end
-                                hitAoEBatch(target.model)
-
-                                now = os.clock()
-                                if not State.isAoEHit or now >= nextToolAction then
-                                    nextToolAction = now + (State.isTurboAttack and 0.15 or 0.25)
-                                    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-                                    local tool = char:FindFirstChildOfClass("Tool") or (backpack and backpack:FindFirstChildOfClass("Tool"))
-                                    if tool and tool.Parent ~= char then
-                                        humanoid:EquipTool(tool)
-                                    end
-                                    if tool then
-                                        tool:Activate()
-                                    end
-                                    pcall(function()
-                                        VirtualUser:CaptureController()
-                                        VirtualUser:ClickButton1(Vector2.new(0, 0))
-                                    end)
-                                end
-
-                                task.wait(State.isAoEHit and (State.isTurboAttack and 0.10 or 0.16) or (State.isTurboAttack and 0.03 or 0.08))
+                            local now = os.clock()
+                            if now >= nextClusterRefresh then
+                                clusterMobs = getGroupAround(anchorMob.hrp.Position, getTargetMonsters())
+                                nextClusterRefresh = now + 0.4
                             end
+
+                            local activeTarget = anchorMob
+                            if State.isAoEHit and #clusterMobs > 1 then
+                                if clusterCursor > #clusterMobs then
+                                    clusterCursor = 1
+                                end
+                                activeTarget = clusterMobs[clusterCursor]
+                                clusterCursor = clusterCursor + 1
+                                if not isValidFarmTarget(activeTarget) then
+                                    activeTarget = anchorMob
+                                end
+                            elseif not State.isAoEHit then
+                                resetHitboxes()
+                            end
+
+                            if UI.TargetHPLabel and now >= nextTargetUI then
+                                nextTargetUI = now + 0.1
+                                local curHP = math.floor(activeTarget.hum.Health)
+                                local maxHP = math.floor(activeTarget.hum.MaxHealth)
+                                local countText = State.isAoEHit and (" [กลุ่ม " .. #clusterMobs .. " ตัว]") or ""
+                                UI.TargetHPLabel.Text = "🎯 " .. activeTarget.model.Name .. ": " .. curHP .. "/" .. maxHP .. countText
+                                UI.TargetHPLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+                            end
+
+                            Hub.Fn.safeTeleport(hrp, activeTarget.hrp.CFrame * CFrame.new(State.currentOffset), activeTarget.hrp)
+                            if not State.isFarmingMob or not isValidFarmTarget(activeTarget) then
+                                break
+                            end
+
+                            if Env.Remotes.CombatHit then
+                                Env.Remotes.CombatHit:FireServer(activeTarget.model, 1)
+                                if State.isTurboAttack then
+                                    Env.Remotes.CombatHit:FireServer(activeTarget.model, 1)
+                                end
+                                if State.isAoEHit then
+                                    for _, otherMob in ipairs(clusterMobs) do
+                                        if otherMob.model ~= activeTarget.model and isValidFarmTarget(otherMob) then
+                                            Env.Remotes.CombatHit:FireServer(otherMob.model, 1)
+                                        end
+                                    end
+                                end
+                            end
+
+                            now = os.clock()
+                            if now >= nextToolAction then
+                                nextToolAction = now + (State.isTurboAttack and 0.10 or 0.20)
+                                local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+                                local tool = char:FindFirstChildOfClass("Tool") or (backpack and backpack:FindFirstChildOfClass("Tool"))
+                                if tool and tool.Parent ~= char then
+                                    humanoid:EquipTool(tool)
+                                end
+                                if tool then
+                                    tool:Activate()
+                                end
+                                pcall(function()
+                                    VirtualUser:CaptureController()
+                                    VirtualUser:ClickButton1(Vector2.new(0, 0))
+                                end)
+                            end
+
+                            task.wait(State.isTurboAttack and 0.06 or 0.12)
                         end
                     else
+                        resetHitboxes()
                         if UI.TargetHPLabel then
                             UI.TargetHPLabel.Text = "🎯 Target: N/A (ไม่มีมอนสเตอร์ที่เลือก)"
                             UI.TargetHPLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
@@ -958,9 +993,10 @@ do
                         task.wait(0.5)
                     end
                 end
-                task.wait(0.05)
             end
         end
+
+        resetHitboxes()
         if UI.TargetHPLabel then
             UI.TargetHPLabel.Text = "🎯 Target: Standby (รอการทำงาน)"
             UI.TargetHPLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
@@ -1086,7 +1122,7 @@ do
                         sessionStartTime = os.clock()
                     end
                     local bodyPos = Hub.Fn.getBodyPosition() or hrp.Position
-                    local maxTether = 455
+                    local maxTether = 465
                     local spiritWorldFolder = workspace:FindFirstChild("SpiritWorld")
                     local foundTarget = false
 
@@ -1368,7 +1404,7 @@ do
                             end)
 
                             local startPos = hrp.Position
-                            local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 32))
+                            local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
 
                             for i = 1, steps do
                                 if not State.isFarming or (State.isAutoMapEvent and Env.ActiveMapEvent) then
@@ -1513,7 +1549,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V23 (Full Uncompressed)"
+    TitleLabel.Text = "Murim Hub V24 (Cluster AoE Safe)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -1627,7 +1663,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V23 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V24 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -1675,7 +1711,7 @@ do
 
     local ToggleMobBtn = createButton("⚔️ Start Auto Farm Monsters", Color3.fromRGB(180, 50, 50), 7)
     local ToggleTurboBtn = createButton("⚡ Turbo Speed Attack (ตีโคตรเร็ว): ON", Color3.fromRGB(220, 120, 20), 8)
-    local ToggleAoEBtn = createButton("💥 Multi-Hit AoE (ตีหลายตัวแบบแบ่งรอบ): ON", Color3.fromRGB(160, 60, 160), 9)
+    local ToggleAoEBtn = createButton("💥 Multi-Hit AoE (ตีกลุ่มพร้อมกัน): ON", Color3.fromRGB(160, 60, 160), 9)
     local ToggleSkillsBtn = createButton("🔥 Auto Spam Skills (Z,X,C,V)", Color3.fromRGB(200, 80, 30), 10)
     local ToggleOffsetBtn = createButton("📍 Distance Offset: " .. Config.farmOffsets[State.farmOffsetIndex].text, Color3.fromRGB(80, 80, 120), 11)
 
@@ -1700,7 +1736,7 @@ do
     end)
     Hub.Fn.connect(ToggleAoEBtn.MouseButton1Click, function()
         State.isAoEHit = not State.isAoEHit
-        ToggleAoEBtn.Text = State.isAoEHit and "💥 Multi-Hit AoE (ตีหลายตัวแบบแบ่งรอบ): ON" or "💥 Multi-Hit AoE (ตีหลายตัวแบบแบ่งรอบ): OFF"
+        ToggleAoEBtn.Text = State.isAoEHit and "💥 Multi-Hit AoE (ตีกลุ่มพร้อมกัน): ON" or "💥 Multi-Hit AoE (ตีกลุ่มพร้อมกัน): OFF"
         ToggleAoEBtn.BackgroundColor3 = State.isAoEHit and Color3.fromRGB(160, 60, 160) or Color3.fromRGB(100, 100, 100)
     end)
     Hub.Fn.connect(ToggleMobBtn.MouseButton1Click, function()
@@ -1872,5 +1908,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V23! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V24! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
 end
