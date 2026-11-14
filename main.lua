@@ -137,7 +137,8 @@ local Hub = {
         collectedCooldowns = {},
         zoneIndex = 1,
         patrolAngle = 0,
-        lastErrorText = "ไม่มี Error"
+        lastErrorText = "ไม่มี Error",
+        cachedWorldBossArenaPos = nil
     },
     UI = {},
     Config = {},
@@ -223,7 +224,8 @@ do
             "CauldronStoke",
             "CauldronStateUpdate",
             "CultivationOrbClicked",
-            "MapEvent"
+            "MapEvent",
+            "WorldBoss"
         }
         for _, rName in ipairs(remoteNames) do
             Env.Remotes[rName] = CultivationEvents:FindFirstChild(rName)
@@ -306,6 +308,7 @@ do
         isTurboAttack = true,
         isAutoSkills = false,
         isAutoMapEvent = false,
+        isAutoWorldBoss = false,
         isFarming = false,
         isDynamicStream = true,
         herbModeIndex = 1,
@@ -424,7 +427,7 @@ do
     end
 end
 
--- 2. ระบบ Events Listeners, Dynamic Streamer และ Sect Clash Event
+-- 2. ระบบ Events Listeners, Dynamic Streamer, Sect Clash และ World Boss
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -484,6 +487,239 @@ do
                 Hub.Fn.logDebug("อีเวนต์จบลงแล้ว")
             end
         end)
+    end
+
+    if Env.Remotes.WorldBoss then
+        Hub.Fn.connect(Env.Remotes.WorldBoss.OnClientEvent, function(action, subAction)
+            if action == "announce" and (subAction == "warning" or subAction == "rise") then
+                Hub.Fn.logDebug("🐉 แจ้งเตือน World Boss: " .. tostring(subAction))
+            end
+        end)
+    end
+
+    function Hub.Fn.getWorldBossFolder()
+        return workspace:FindFirstChild("WorldBoss")
+    end
+
+    function Hub.Fn.getWorldBossState()
+        local wbFolder = Hub.Fn.getWorldBossFolder()
+        if not wbFolder then
+            return "idle", 0
+        end
+        local state = tostring(wbFolder:GetAttribute("State") or "idle")
+        local spawnAt = tonumber(wbFolder:GetAttribute("SpawnAt")) or 0
+        return state, spawnAt
+    end
+
+    function Hub.Fn.isWorldBossActive()
+        if not State.isAutoWorldBoss then
+            return false
+        end
+        local state = Hub.Fn.getWorldBossState()
+        return (state == "warning" or state == "rising" or state == "fight")
+    end
+
+    function Hub.Fn.findWorldBossModel()
+        local wbFolder = Hub.Fn.getWorldBossFolder()
+        if not wbFolder then
+            return nil, nil, nil
+        end
+        for _, child in ipairs(wbFolder:GetChildren()) do
+            if child:IsA("Model") and (child:GetAttribute("IsWorldBoss") == true or child:FindFirstChildOfClass("Humanoid")) then
+                local hum = child:FindFirstChildOfClass("Humanoid")
+                local hrp = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart")
+                if hum and hum.Health > 0 and hrp then
+                    return child, hrp, hum
+                end
+            end
+        end
+        return nil, nil, nil
+    end
+
+    function Hub.Fn.getWorldBossArenaPos()
+        if Env.cachedWorldBossArenaPos then
+            return Env.cachedWorldBossArenaPos
+        end
+
+        local mapFolder = workspace:FindFirstChild("Map_sacred-mountain")
+        if mapFolder then
+            local landmarks = mapFolder:FindFirstChild("Landmarks")
+            local ashPlain = landmarks and landmarks:FindFirstChild("World Boss Ash Plain")
+            if ashPlain then
+                local sumPos, count = Vector3.new(0, 0, 0), 0
+                for _, desc in ipairs(ashPlain:GetDescendants()) do
+                    if desc:IsA("BasePart") then
+                        sumPos = sumPos + desc.Position
+                        count = count + 1
+                    end
+                end
+                if count > 0 then
+                    Env.cachedWorldBossArenaPos = sumPos / count
+                    return Env.cachedWorldBossArenaPos
+                end
+            end
+        end
+
+        local anchors = workspace:FindFirstChild("MapAnchors")
+        if anchors then
+            for _, desc in ipairs(anchors:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    local n = desc.Name:lower()
+                    if n:find("boss") or n:find("ash") or n:find("sovereign") or n:find("sacred") then
+                        return desc.Position
+                    end
+                end
+            end
+        end
+
+        return Vector3.new(900, 130, 2100)
+    end
+
+    function Hub.Fn.getWorldBossStandCFrame(bossModel, bossHrp)
+        -- ใช้หลักการเดียวกับ BossReach: หาจุดบนผิวชิ้นส่วนของบอสที่ใกล้ตัวเราที่สุด เพื่อไม่ให้หลุดระยะตี
+        local _, playerHrp = Hub.Fn.getCharacter()
+        local refPos = playerHrp and playerHrp.Position or bossHrp.Position
+        local closestSurface, bestDist = nil, math.huge
+
+        for _, part in ipairs(bossModel:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Transparency < 1 then
+                local localPt = part.CFrame:PointToObjectSpace(refPos)
+                local half = part.Size * 0.5
+                local clamped = Vector3.new(
+                    math.clamp(localPt.X, -half.X, half.X),
+                    math.clamp(localPt.Y, -half.Y, half.Y),
+                    math.clamp(localPt.Z, -half.Z, half.Z)
+                )
+                local worldPt = part.CFrame:PointToWorldSpace(clamped)
+                local d = (worldPt - refPos).Magnitude
+                if d < bestDist then
+                    bestDist = d
+                    closestSurface = worldPt
+                end
+            end
+        end
+
+        if closestSurface then
+            -- ยืนชิดผิวตัวบอสในระยะปลอดภัย (ห่างจากผิว 4 Studs อยู่ใน BossReach.PAD = 8)
+            local dir = (refPos - closestSurface)
+            local flatDir = Vector3.new(dir.X, 0, dir.Z)
+            if flatDir.Magnitude < 0.1 then
+                flatDir = Vector3.new(0, 0, 1)
+            else
+                flatDir = flatDir.Unit
+            end
+            return CFrame.new(closestSurface + flatDir * 4 + Vector3.new(0, 1, 0))
+        end
+
+        return bossHrp.CFrame * CFrame.new(0, 0, 8)
+    end
+
+    function Hub.Fn.startWorldBossLoop()
+        local nextToolAction = 0
+        local wasFightingBoss = false
+
+        while State.isAutoWorldBoss do
+            local wbState, spawnAt = Hub.Fn.getWorldBossState()
+            local nowSec = os.time()
+
+            if UI.WorldBossStatusLabel then
+                if wbState == "fight" or wbState == "rising" then
+                    local _, _, bossHum = Hub.Fn.findWorldBossModel()
+                    if bossHum then
+                        local pct = bossHum.MaxHealth > 0 and math.floor((bossHum.Health / bossHum.MaxHealth) * 100) or 0
+                        UI.WorldBossStatusLabel.Text = "🐉 World Boss: FIGHT! (" .. pct .. "%)"
+                        UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(255, 95, 95)
+                    else
+                        UI.WorldBossStatusLabel.Text = "🐉 World Boss: " .. wbState:upper() .. " (กำลังเดินทาง)"
+                        UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(255, 190, 80)
+                    end
+                elseif wbState == "warning" then
+                    local left = math.max(0, spawnAt - nowSec)
+                    UI.WorldBossStatusLabel.Text = "🐉 World Boss: เกิดใน " .. left .. " วิ (กำลังไปรอ)"
+                    UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(255, 220, 90)
+                else
+                    if spawnAt > nowSec then
+                        local diff = spawnAt - nowSec
+                        local mins = math.floor(diff / 60)
+                        local secs = diff % 60
+                        UI.WorldBossStatusLabel.Text = string.format("🐉 World Boss: รอบถัดไป %d:%02d", mins, secs)
+                    else
+                        UI.WorldBossStatusLabel.Text = "🐉 World Boss: Standby (" .. wbState .. ")"
+                    end
+                    UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
+                end
+            end
+
+            if wbState == "warning" or wbState == "rising" or wbState == "fight" then
+                wasFightingBoss = true
+                local char, hrp, hum = Hub.Fn.getCharacter()
+                if char and hrp and hum and hum.Health > 0 then
+                    local bossModel, bossHrp, bossHum = Hub.Fn.findWorldBossModel()
+                    if not bossModel or not bossHrp then
+                        local arenaPos = Hub.Fn.getWorldBossArenaPos()
+                        pcall(function()
+                            workspace:RequestStreamAroundAsync(arenaPos)
+                        end)
+                        if (hrp.Position - arenaPos).Magnitude > 60 then
+                            Hub.Fn.safeTeleport(hrp, CFrame.new(arenaPos + Vector3.new(0, 5, 0)))
+                        end
+                        task.wait(0.25)
+                    else
+                        local standCFrame = Hub.Fn.getWorldBossStandCFrame(bossModel, bossHrp)
+                        Hub.Fn.safeTeleport(hrp, standCFrame, bossHrp)
+
+                        if wbState == "fight" and bossHum and bossHum.Health > 0 then
+                            if Env.Remotes.CombatHit then
+                                Env.Remotes.CombatHit:FireServer(bossModel, 1)
+                                if State.isTurboAttack then
+                                    Env.Remotes.CombatHit:FireServer(bossModel, 1)
+                                end
+                            end
+
+                            local now = os.clock()
+                            if now >= nextToolAction then
+                                nextToolAction = now + (State.isTurboAttack and 0.10 or 0.20)
+                                local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+                                local tool = char:FindFirstChildOfClass("Tool") or (backpack and backpack:FindFirstChildOfClass("Tool"))
+                                if tool and tool.Parent ~= char then
+                                    hum:EquipTool(tool)
+                                end
+                                if tool then
+                                    tool:Activate()
+                                end
+                                pcall(function()
+                                    VirtualUser:CaptureController()
+                                    VirtualUser:ClickButton1(Vector2.new(0, 0))
+                                end)
+                            end
+                        end
+                        task.wait(State.isTurboAttack and 0.06 or 0.12)
+                    end
+                else
+                    task.wait(0.3)
+                end
+            else
+                if wasFightingBoss then
+                    wasFightingBoss = false
+                    Hub.Fn.logDebug("🐉 จบรอบ World Boss! กลับสู่โหมดฟาร์มปกติ")
+                    -- เช็กและเปิดกล่อง Sovereign's Coffer หากโผล่ใกล้ตัว
+                    local fxFolder = workspace:FindFirstChild("WorldBossFX")
+                    if fxFolder and fireproximityprompt then
+                        for _, desc in ipairs(fxFolder:GetDescendants()) do
+                            if desc:IsA("ProximityPrompt") and desc.ObjectText == "Sovereign's Coffer" then
+                                pcall(fireproximityprompt, desc)
+                            end
+                        end
+                    end
+                end
+                task.wait(0.8)
+            end
+        end
+
+        if UI.WorldBossStatusLabel then
+            UI.WorldBossStatusLabel.Text = "🐉 World Boss: OFF"
+            UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
+        end
     end
 
     function Hub.Fn.getDynamicStreamPoints()
@@ -572,55 +808,59 @@ do
 
     function Hub.Fn.startMapEventLoop()
         while State.isAutoMapEvent do
-            if Env.ActiveMapEvent and workspace:GetServerTimeNow() > (Env.ActiveMapEvent.endsAt + 10) then
-                Env.ActiveMapEvent = nil
-            end
+            if Hub.Fn.isWorldBossActive() then
+                task.wait(0.5)
+            else
+                if Env.ActiveMapEvent and workspace:GetServerTimeNow() > (Env.ActiveMapEvent.endsAt + 10) then
+                    Env.ActiveMapEvent = nil
+                end
 
-            if Env.ActiveMapEvent then
-                local char, hrp, hum = Hub.Fn.getCharacter()
-                if char and hrp and hum and hum.Health > 0 then
-                    local distToCentre = (hrp.Position - Env.ActiveMapEvent.centre).Magnitude
-                    local joinRange = 145
+                if Env.ActiveMapEvent then
+                    local char, hrp, hum = Hub.Fn.getCharacter()
+                    if char and hrp and hum and hum.Health > 0 then
+                        local distToCentre = (hrp.Position - Env.ActiveMapEvent.centre).Magnitude
+                        local joinRange = 145
 
-                    if not Env.ActiveMapEvent.side or distToCentre > joinRange then
-                        if UI.EventStatusLabel then
-                            UI.EventStatusLabel.Text = "🚩 กำลังเข้าร่วม: " .. Env.ActiveMapEvent.name
-                            UI.EventStatusLabel.TextColor3 = Color3.fromRGB(255, 210, 90)
-                        end
-                        Hub.Fn.safeTeleport(hrp, CFrame.new(Env.ActiveMapEvent.centre + Vector3.new(0, 3, 0)))
-                        task.wait(0.3)
-                    else
-                        local teamInfo = Env.ActiveMapEvent.teams[Env.ActiveMapEvent.side]
-                        local enemySide = (Env.ActiveMapEvent.side == Env.ActiveMapEvent.order[1]) and Env.ActiveMapEvent.order[2] or Env.ActiveMapEvent.order[1]
-                        local enemyTeamInfo = Env.ActiveMapEvent.teams[enemySide]
-                        local enemyFighterName = enemyTeamInfo and enemyTeamInfo.fighter or nil
-
-                        if UI.EventStatusLabel then
-                            UI.EventStatusLabel.Text = "⚔️ ฝ่าย: " .. (teamInfo and teamInfo.name or Env.ActiveMapEvent.side)
-                            UI.EventStatusLabel.TextColor3 = Color3.fromRGB(100, 230, 140)
-                        end
-
-                        local enemy = getEventEnemyTarget(Env.ActiveMapEvent.centre, enemyFighterName)
-                        if enemy then
-                            Hub.Fn.safeTeleport(hrp, enemy.hrp.CFrame * CFrame.new(State.currentOffset), enemy.hrp)
-                            if Env.Remotes.CombatHit then
-                                Env.Remotes.CombatHit:FireServer(enemy.model, 1)
-                                if State.isTurboAttack then
-                                    Env.Remotes.CombatHit:FireServer(enemy.model, 1)
-                                end
+                        if not Env.ActiveMapEvent.side or distToCentre > joinRange then
+                            if UI.EventStatusLabel then
+                                UI.EventStatusLabel.Text = "🚩 กำลังเข้าร่วม: " .. Env.ActiveMapEvent.name
+                                UI.EventStatusLabel.TextColor3 = Color3.fromRGB(255, 210, 90)
                             end
+                            Hub.Fn.safeTeleport(hrp, CFrame.new(Env.ActiveMapEvent.centre + Vector3.new(0, 3, 0)))
+                            task.wait(0.3)
                         else
-                            Hub.Fn.safeTeleport(hrp, CFrame.new(Env.ActiveMapEvent.centre + Vector3.new(0, 5, 0)))
+                            local teamInfo = Env.ActiveMapEvent.teams[Env.ActiveMapEvent.side]
+                            local enemySide = (Env.ActiveMapEvent.side == Env.ActiveMapEvent.order[1]) and Env.ActiveMapEvent.order[2] or Env.ActiveMapEvent.order[1]
+                            local enemyTeamInfo = Env.ActiveMapEvent.teams[enemySide]
+                            local enemyFighterName = enemyTeamInfo and enemyTeamInfo.fighter or nil
+
+                            if UI.EventStatusLabel then
+                                UI.EventStatusLabel.Text = "⚔️ ฝ่าย: " .. (teamInfo and teamInfo.name or Env.ActiveMapEvent.side)
+                                UI.EventStatusLabel.TextColor3 = Color3.fromRGB(100, 230, 140)
+                            end
+
+                            local enemy = getEventEnemyTarget(Env.ActiveMapEvent.centre, enemyFighterName)
+                            if enemy then
+                                Hub.Fn.safeTeleport(hrp, enemy.hrp.CFrame * CFrame.new(State.currentOffset), enemy.hrp)
+                                if Env.Remotes.CombatHit then
+                                    Env.Remotes.CombatHit:FireServer(enemy.model, 1)
+                                    if State.isTurboAttack then
+                                        Env.Remotes.CombatHit:FireServer(enemy.model, 1)
+                                    end
+                                end
+                            else
+                                Hub.Fn.safeTeleport(hrp, CFrame.new(Env.ActiveMapEvent.centre + Vector3.new(0, 5, 0)))
+                            end
                         end
                     end
+                    task.wait(0.12)
+                else
+                    if UI.EventStatusLabel then
+                        UI.EventStatusLabel.Text = "🚩 Event: Waiting (รอสงครามสำนัก)"
+                        UI.EventStatusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
+                    end
+                    task.wait(1.0)
                 end
-                task.wait(0.12)
-            else
-                if UI.EventStatusLabel then
-                    UI.EventStatusLabel.Text = "🚩 Event: Waiting (รอสงครามสำนัก)"
-                    UI.EventStatusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
-                end
-                task.wait(1.0)
             end
         end
         if UI.EventStatusLabel then
@@ -630,7 +870,7 @@ do
     end
 end
 
--- 3. ระบบสแกนและฟาร์มมอนสเตอร์ (รองรับตีกลุ่มพร้อมกันตาม MovementGuardRules)
+-- 3. ระบบสแกนและฟาร์มมอนสเตอร์ (หยุดอัตโนมัติชั่วคราวเมื่อ World Boss เกิด)
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -638,7 +878,8 @@ do
 
     local function getTargetContainers()
         local result = {}
-        for _, name in ipairs({ "BanditCamp", "CultivatorCamps", "WorldBoss", "BlockingDummy", "TrainingDummy" }) do
+        -- ไม่รวม WorldBoss เข้าในลิสต์มอนทั่วไป เพื่อแยกจัดการโดยระบบ World Boss โดยเฉพาะ
+        for _, name in ipairs({ "BanditCamp", "CultivatorCamps", "BlockingDummy", "TrainingDummy" }) do
             local container = workspace:FindFirstChild(name)
             if container then
                 result[#result + 1] = container
@@ -871,7 +1112,6 @@ do
         local function getGroupAround(centerPos, allMobs)
             local group = {}
             for _, m in ipairs(allMobs) do
-                -- จำกัดรัศมีกลุ่มที่ 38 Studs เพื่อให้อยู่ในค่า SLACK = 40 ของ MovementGuardRules
                 if isValidFarmTarget(m) and (m.hrp.Position - centerPos).Magnitude <= 38 then
                     table.insert(group, m)
                     if State.isAoEHit then
@@ -889,7 +1129,15 @@ do
         end
 
         while State.isFarmingMob do
-            if State.isAutoMapEvent and Env.ActiveMapEvent then
+            -- แทรกคิว: หาก World Boss เกิด หรือกำลังทำ Sect Clash ให้หยุดฟาร์มมอนชั่วคราว
+            if Hub.Fn.isWorldBossActive() then
+                resetHitboxes()
+                if UI.TargetHPLabel then
+                    UI.TargetHPLabel.Text = "🎯 พักฟาร์มชั่วคราว -> สลับไปตี World Boss!"
+                    UI.TargetHPLabel.TextColor3 = Color3.fromRGB(255, 130, 100)
+                end
+                task.wait(0.5)
+            elseif State.isAutoMapEvent and Env.ActiveMapEvent then
                 resetHitboxes()
                 task.wait(0.5)
             else
@@ -908,7 +1156,7 @@ do
                         end)
                         local anchorMob = allMobs[1]
 
-                        while State.isFarmingMob and isValidFarmTarget(anchorMob) and not (State.isAutoMapEvent and Env.ActiveMapEvent) do
+                        while State.isFarmingMob and isValidFarmTarget(anchorMob) and not Hub.Fn.isWorldBossActive() and not (State.isAutoMapEvent and Env.ActiveMapEvent) do
                             local char, hrp, humanoid = Hub.Fn.getCharacter()
                             if not char or not humanoid or humanoid.Health <= 0 then
                                 break
@@ -944,7 +1192,7 @@ do
                             end
 
                             Hub.Fn.safeTeleport(hrp, activeTarget.hrp.CFrame * CFrame.new(State.currentOffset), activeTarget.hrp)
-                            if not State.isFarmingMob or not isValidFarmTarget(activeTarget) then
+                            if not State.isFarmingMob or not isValidFarmTarget(activeTarget) or Hub.Fn.isWorldBossActive() then
                                 break
                             end
 
@@ -987,7 +1235,7 @@ do
                             UI.TargetHPLabel.Text = "🎯 Target: N/A (ไม่มีมอนสเตอร์ที่เลือก)"
                             UI.TargetHPLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
                         end
-                        if not State.isFarming and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
+                        if not State.isFarming and not Hub.Fn.isWorldBossActive() and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
                             Env.groundPlatform.CFrame = CFrame.new(0, 9999, 0)
                         end
                         task.wait(0.5)
@@ -1001,7 +1249,7 @@ do
             UI.TargetHPLabel.Text = "🎯 Target: Standby (รอการทำงาน)"
             UI.TargetHPLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
         end
-        if not State.isFarming and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
+        if not State.isFarming and not Hub.Fn.isWorldBossActive() and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
             Env.groundPlatform.CFrame = CFrame.new(0, 9999, 0)
         end
     end
@@ -1346,7 +1594,7 @@ do
         initHerbCache()
         Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร...")
         while State.isFarming do
-            if State.isAutoMapEvent and Env.ActiveMapEvent then
+            if Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                 task.wait(0.5)
             else
                 local char, hrp, humanoid = Hub.Fn.getCharacter()
@@ -1407,7 +1655,7 @@ do
                             local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
 
                             for i = 1, steps do
-                                if not State.isFarming or (State.isAutoMapEvent and Env.ActiveMapEvent) then
+                                if not State.isFarming or Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                                     break
                                 end
                                 if getBestHerbTarget(hrp.Position) then
@@ -1428,7 +1676,7 @@ do
             end
         end
         Hub.Fn.logDebug("หยุดเก็บสมุนไพรแล้ว")
-        if not State.isFarmingMob and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
+        if not State.isFarmingMob and not Hub.Fn.isWorldBossActive() and not (State.isAutoMapEvent and Env.ActiveMapEvent) then
             Env.groundPlatform.CFrame = CFrame.new(0, 9999, 0)
         end
     end
@@ -1549,7 +1797,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V24 (Cluster AoE Safe)"
+    TitleLabel.Text = "Murim Hub V25 (+Auto World Boss)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -1574,7 +1822,7 @@ do
     UI.ScrollFrame.BorderSizePixel = 0
     UI.ScrollFrame.ScrollBarThickness = 5
     UI.ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 120)
-    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1720)
+    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1800)
     UI.ScrollFrame.Parent = MainFrame
 
     local scrollLayout = Instance.new("UIListLayout")
@@ -1663,7 +1911,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V24 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V25 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -1680,8 +1928,8 @@ do
         showDebugErrorGui("Murim Hub Log & Last Error", "Last Error:\n" .. tostring(Env.lastErrorText) .. "\n\nRecent Logs:\n" .. UI.DebugBox.Text)
     end)
 
-    -- หมวด Combat & Sect Clash Event
-    createCategoryHeader("⚔️ COMBAT & SECT CLASH EVENT", 3)
+    -- หมวด Combat, World Boss & Sect Clash Event
+    createCategoryHeader("⚔️ COMBAT, WORLD BOSS & EVENTS", 3)
     local RefreshMobListBtn = createButton("🔄 สแกนรายชื่อมอนสเตอร์ในแมพ", Color3.fromRGB(40, 90, 140), 4)
 
     UI.MobListContainer = Instance.new("Frame")
@@ -1715,6 +1963,19 @@ do
     local ToggleSkillsBtn = createButton("🔥 Auto Spam Skills (Z,X,C,V)", Color3.fromRGB(200, 80, 30), 10)
     local ToggleOffsetBtn = createButton("📍 Distance Offset: " .. Config.farmOffsets[State.farmOffsetIndex].text, Color3.fromRGB(80, 80, 120), 11)
 
+    UI.WorldBossStatusLabel = Instance.new("TextLabel")
+    UI.WorldBossStatusLabel.Size = UDim2.new(1, 0, 0, 22)
+    UI.WorldBossStatusLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+    UI.WorldBossStatusLabel.TextColor3 = Color3.fromRGB(170, 170, 170)
+    UI.WorldBossStatusLabel.Text = "🐉 World Boss: OFF"
+    UI.WorldBossStatusLabel.Font = Enum.Font.SourceSansBold
+    UI.WorldBossStatusLabel.TextSize = 11
+    UI.WorldBossStatusLabel.LayoutOrder = 12
+    UI.WorldBossStatusLabel.Parent = UI.ScrollFrame
+    Instance.new("UICorner", UI.WorldBossStatusLabel).CornerRadius = UDim.new(0, 5)
+
+    local ToggleWorldBossBtn = createButton("🐉 Auto World Boss (แทรกคิวอัตโนมัติ): OFF", Color3.fromRGB(100, 100, 100), 13)
+
     UI.EventStatusLabel = Instance.new("TextLabel")
     UI.EventStatusLabel.Size = UDim2.new(1, 0, 0, 22)
     UI.EventStatusLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
@@ -1722,11 +1983,11 @@ do
     UI.EventStatusLabel.Text = "🚩 Event: OFF"
     UI.EventStatusLabel.Font = Enum.Font.SourceSansBold
     UI.EventStatusLabel.TextSize = 11
-    UI.EventStatusLabel.LayoutOrder = 12
+    UI.EventStatusLabel.LayoutOrder = 14
     UI.EventStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.EventStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleMapEventBtn = createButton("🚩 Auto Sect Clash Event: OFF", Color3.fromRGB(100, 100, 100), 13)
+    local ToggleMapEventBtn = createButton("🚩 Auto Sect Clash Event: OFF", Color3.fromRGB(100, 100, 100), 15)
 
     Hub.Fn.connect(RefreshMobListBtn.MouseButton1Click, Hub.Fn.rebuildMobListUI)
     Hub.Fn.connect(ToggleTurboBtn.MouseButton1Click, function()
@@ -1756,6 +2017,12 @@ do
         State.currentOffset = Config.farmOffsets[State.farmOffsetIndex].offset
         ToggleOffsetBtn.Text = "📍 Distance Offset: " .. Config.farmOffsets[State.farmOffsetIndex].text
     end)
+    Hub.Fn.connect(ToggleWorldBossBtn.MouseButton1Click, function()
+        State.isAutoWorldBoss = not State.isAutoWorldBoss
+        ToggleWorldBossBtn.Text = State.isAutoWorldBoss and "🐉 Auto World Boss (แทรกคิวอัตโนมัติ): ON" or "🐉 Auto World Boss (แทรกคิวอัตโนมัติ): OFF"
+        ToggleWorldBossBtn.BackgroundColor3 = State.isAutoWorldBoss and Color3.fromRGB(185, 55, 55) or Color3.fromRGB(100, 100, 100)
+        Hub.Fn.setWorker("startWorldBossLoop", State.isAutoWorldBoss, Hub.Fn.startWorldBossLoop)
+    end)
     Hub.Fn.connect(ToggleMapEventBtn.MouseButton1Click, function()
         State.isAutoMapEvent = not State.isAutoMapEvent
         ToggleMapEventBtn.Text = State.isAutoMapEvent and "🚩 Auto Sect Clash Event: ON" or "🚩 Auto Sect Clash Event: OFF"
@@ -1764,29 +2031,29 @@ do
     end)
 
     -- หมวด Cultivation, Gathering & Alchemy
-    createCategoryHeader("✨ CULTIVATION & BREAKTHROUGH", 14)
-    local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 15)
-    local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 16)
-    local ToggleBodyBreakthroughBtn = createButton("💪 Auto Body Breakthrough (ทะลวงขั้นร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 17)
-    local TogglePushupBtn = createButton("🏋️‍♂️ Start Auto Pushup (วิดพื้น/ฝึกร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 18)
-    local ToggleTribulationBtn = createButton("⚡ Auto Tribulation (ดูดซับทัณฑ์สวรรค์): OFF", Color3.fromRGB(100, 100, 100), 19)
-    local ToggleSoulBtn = createButton("👻 Auto Soul & Catch (ส่งจิตจับวิญญาณ): OFF", Color3.fromRGB(100, 100, 100), 20)
-    local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 21)
-    local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 22)
+    createCategoryHeader("✨ CULTIVATION & BREAKTHROUGH", 16)
+    local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 17)
+    local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 18)
+    local ToggleBodyBreakthroughBtn = createButton("💪 Auto Body Breakthrough (ทะลวงขั้นร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 19)
+    local TogglePushupBtn = createButton("🏋️‍♂️ Start Auto Pushup (วิดพื้น/ฝึกร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 20)
+    local ToggleTribulationBtn = createButton("⚡ Auto Tribulation (ดูดซับทัณฑ์สวรรค์): OFF", Color3.fromRGB(100, 100, 100), 21)
+    local ToggleSoulBtn = createButton("👻 Auto Soul & Catch (ส่งจิตจับวิญญาณ): OFF", Color3.fromRGB(100, 100, 100), 22)
+    local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 23)
+    local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 24)
 
-    createCategoryHeader("🌿 GATHERING & DYNAMIC MAP STREAMER", 23)
-    local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Smart All-Map)", Color3.fromRGB(40, 160, 80), 24)
-    local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 25)
-    local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 26)
+    createCategoryHeader("🌿 GATHERING & DYNAMIC MAP STREAMER", 25)
+    local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Smart All-Map)", Color3.fromRGB(40, 160, 80), 26)
+    local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 27)
+    local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 28)
 
-    createCategoryHeader("⚗️ ALCHEMY & BUFF PILLS", 27)
-    local ToggleRecipeBtn = createButton("💊 Recipe: " .. Config.recipeList[1].name, Color3.fromRGB(70, 120, 170), 28)
-    local ToggleYearBtn = createButton("🎯 Min Herb Year: Any (All)", Color3.fromRGB(70, 70, 110), 29)
-    local ToggleBrewBtn = createButton("⚗️ Start Auto Brew Pills", Color3.fromRGB(140, 50, 140), 30)
+    createCategoryHeader("⚗️ ALCHEMY & BUFF PILLS", 29)
+    local ToggleRecipeBtn = createButton("💊 Recipe: " .. Config.recipeList[1].name, Color3.fromRGB(70, 120, 170), 30)
+    local ToggleYearBtn = createButton("🎯 Min Herb Year: Any (All)", Color3.fromRGB(70, 70, 110), 31)
+    local ToggleBrewBtn = createButton("⚗️ Start Auto Brew Pills", Color3.fromRGB(140, 50, 140), 32)
 
-    createCategoryHeader("⚙️ SYSTEM & REWARDS", 31)
-    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 32)
-    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 33)
+    createCategoryHeader("⚙️ SYSTEM & REWARDS", 33)
+    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 34)
+    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 35)
 
     Hub.Fn.connect(ToggleCultivateBtn.MouseButton1Click, function()
         State.isAutoCultivate = not State.isAutoCultivate
@@ -1908,5 +2175,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V24! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V25! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
 end
