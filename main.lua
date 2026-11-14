@@ -6,8 +6,8 @@ local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- ==================== ระบบแสดง Error GUI (พร้อมปุ่ม Copy และปุ่มปิด) ====================
-local function showDebugErrorGui(titleText, errMsg)
+-- ==================== ระบบแสดง Error / Rules GUI (พร้อมปุ่ม Copy และปุ่มปิด) ====================
+local function showDebugErrorGui(titleText, errMsg, extraActionText, extraActionCallback)
     pcall(function()
         local old = PlayerGui:FindFirstChild("MurimDebugErrorGui")
         if old then
@@ -21,8 +21,8 @@ local function showDebugErrorGui(titleText, errMsg)
         sg.Parent = PlayerGui
 
         local frame = Instance.new("Frame")
-        frame.Size = UDim2.new(0, 380, 0, 220)
-        frame.Position = UDim2.new(0.5, -190, 0.3, 0)
+        frame.Size = UDim2.new(0, 420, 0, 320)
+        frame.Position = UDim2.new(0.5, -210, 0.22, 0)
         frame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
         frame.BorderSizePixel = 0
         frame.Parent = sg
@@ -39,8 +39,8 @@ local function showDebugErrorGui(titleText, errMsg)
         title.Size = UDim2.new(1, -40, 1, 0)
         title.Position = UDim2.new(0, 12, 0, 0)
         title.BackgroundTransparency = 1
-        title.Text = "⚠️ " .. tostring(titleText)
-        title.TextColor3 = Color3.fromRGB(255, 100, 100)
+        title.Text = tostring(titleText)
+        title.TextColor3 = Color3.fromRGB(255, 215, 110)
         title.Font = Enum.Font.SourceSansBold
         title.TextSize = 14
         title.TextXAlignment = Enum.TextXAlignment.Left
@@ -61,10 +61,10 @@ local function showDebugErrorGui(titleText, errMsg)
         end)
 
         local textBox = Instance.new("TextBox")
-        textBox.Size = UDim2.new(1, -20, 0, 120)
-        textBox.Position = UDim2.new(0, 10, 0, 45)
+        textBox.Size = UDim2.new(1, -20, 1, -95)
+        textBox.Position = UDim2.new(0, 10, 0, 43)
         textBox.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
-        textBox.TextColor3 = Color3.fromRGB(255, 220, 220)
+        textBox.TextColor3 = Color3.fromRGB(225, 245, 230)
         textBox.Text = tostring(errMsg)
         textBox.TextWrapped = true
         textBox.MultiLine = true
@@ -76,14 +76,17 @@ local function showDebugErrorGui(titleText, errMsg)
         textBox.Parent = frame
         Instance.new("UICorner", textBox).CornerRadius = UDim.new(0, 6)
 
+        local hasExtra = (type(extraActionText) == "string" and type(extraActionCallback) == "function")
+        local btnWidth = hasExtra and 0.31 or 0.47
+
         local copyBtn = Instance.new("TextButton")
-        copyBtn.Size = UDim2.new(0.48, 0, 0, 32)
+        copyBtn.Size = UDim2.new(btnWidth, 0, 0, 32)
         copyBtn.Position = UDim2.new(0, 10, 1, -42)
         copyBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 180)
-        copyBtn.Text = "📋 Copy Error"
+        copyBtn.Text = "📋 Copy All"
         copyBtn.TextColor3 = Color3.new(1, 1, 1)
         copyBtn.Font = Enum.Font.SourceSansBold
-        copyBtn.TextSize = 13
+        copyBtn.TextSize = 12
         copyBtn.Parent = frame
         Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
 
@@ -92,20 +95,37 @@ local function showDebugErrorGui(titleText, errMsg)
                 setclipboard(textBox.Text)
                 copyBtn.Text = "✅ Copied!"
                 task.wait(1.5)
-                copyBtn.Text = "📋 Copy Error"
+                copyBtn.Text = "📋 Copy All"
             else
                 copyBtn.Text = "❌ Not Supported"
             end
         end)
 
+        if hasExtra then
+            local extraBtn = Instance.new("TextButton")
+            extraBtn.Size = UDim2.new(btnWidth, 0, 0, 32)
+            extraBtn.Position = UDim2.new(0.345, 0, 1, -42)
+            extraBtn.BackgroundColor3 = Color3.fromRGB(45, 145, 95)
+            extraBtn.Text = extraActionText
+            extraBtn.TextColor3 = Color3.new(1, 1, 1)
+            extraBtn.Font = Enum.Font.SourceSansBold
+            extraBtn.TextSize = 12
+            extraBtn.Parent = frame
+            Instance.new("UICorner", extraBtn).CornerRadius = UDim.new(0, 6)
+
+            extraBtn.MouseButton1Click:Connect(function()
+                extraActionCallback(extraBtn, textBox)
+            end)
+        end
+
         local bottomCloseBtn = Instance.new("TextButton")
-        bottomCloseBtn.Size = UDim2.new(0.48, 0, 0, 32)
-        bottomCloseBtn.Position = UDim2.new(0.52, 0, 1, -42)
+        bottomCloseBtn.Size = UDim2.new(btnWidth, 0, 0, 32)
+        bottomCloseBtn.Position = UDim2.new(hasExtra and 0.67 or 0.505, 0, 1, -42)
         bottomCloseBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 95)
-        bottomCloseBtn.Text = "❌ ปิดหน้าต่าง"
+        bottomCloseBtn.Text = "❌ ปิด"
         bottomCloseBtn.TextColor3 = Color3.new(1, 1, 1)
         bottomCloseBtn.Font = Enum.Font.SourceSansBold
-        bottomCloseBtn.TextSize = 13
+        bottomCloseBtn.TextSize = 12
         bottomCloseBtn.Parent = frame
         Instance.new("UICorner", bottomCloseBtn).CornerRadius = UDim.new(0, 6)
 
@@ -138,7 +158,8 @@ local Hub = {
         zoneIndex = 1,
         patrolAngle = 0,
         lastErrorText = "ไม่มี Error",
-        cachedWorldBossArenaPos = nil
+        cachedWorldBossArenaPos = nil,
+        lastRulesSnapshot = nil
     },
     UI = {},
     Config = {},
@@ -146,7 +167,7 @@ local Hub = {
     Fn = {}
 }
 
--- 1. ระบบพื้นฐาน Remotes & Helpers
+-- 1. ระบบพื้นฐาน Remotes, Helpers & Game Rules Inspector
 do
     local Env = Hub.Env
     local UI = Hub.UI
@@ -167,7 +188,7 @@ do
             if not ok and not Env.destroyed then
                 Env.lastErrorText = tostring(err)
                 Hub.Fn.logDebug("ERR(Event): " .. tostring(err))
-                showDebugErrorGui("Event Callback Error", err)
+                showDebugErrorGui("⚠️ Event Callback Error", err)
             end
         end)
         Env.connections[connection] = true
@@ -192,11 +213,175 @@ do
             if not ok and not Env.destroyed then
                 Env.lastErrorText = tostring(err)
                 Hub.Fn.logDebug("ERR(" .. name .. "): " .. tostring(err))
-                showDebugErrorGui("Worker Error: " .. name, err)
+                showDebugErrorGui("⚠️ Worker Error: " .. name, err)
             end
         end)
         Env.workers[name] = thread
         return thread
+    end
+
+    -- ฟังก์ชันสแกน Rules, Configs, Remotes และเทียบความเปลี่ยนแปลงจาก Snapshot เดิม
+    function Hub.Fn.inspectGameRules()
+        local rawLines = {}
+        local function addRaw(str)
+            table.insert(rawLines, tostring(str))
+        end
+
+        local function dumpTable(tbl, prefix, depth)
+            if depth > 2 then
+                return
+            end
+            local keys = {}
+            for k in pairs(tbl) do
+                table.insert(keys, k)
+            end
+            table.sort(keys, function(a, b)
+                return tostring(a) < tostring(b)
+            end)
+            for _, k in ipairs(keys) do
+                local v = tbl[k]
+                local fullKey = prefix .. "." .. tostring(k)
+                if type(v) == "table" then
+                    dumpTable(v, fullKey, depth + 1)
+                elseif type(v) ~= "function" and type(v) ~= "userdata" then
+                    addRaw(fullKey .. " = " .. tostring(v))
+                end
+            end
+        end
+
+        addRaw("=== 1. REPLICATED STORAGE RULES & CONFIG MODULES ===")
+        local modules = {}
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("ModuleScript") then
+                local lower = obj.Name:lower()
+                if lower:find("rule") or lower:find("config") or lower:find("boss") or lower:find("guard") or lower:find("const") or lower:find("stat") or lower:find("data") or lower:find("pill") or lower:find("herb") then
+                    table.insert(modules, obj)
+                end
+            end
+        end
+        table.sort(modules, function(a, b)
+            return a:GetFullName() < b:GetFullName()
+        end)
+
+        for _, modObj in ipairs(modules) do
+            local ok, res = pcall(require, modObj)
+            if ok and type(res) == "table" then
+                dumpTable(res, modObj.Name, 1)
+            end
+        end
+
+        addRaw("\n=== 2. CULTIVATION REMOTES ===")
+        local cultEvents = ReplicatedStorage:FindFirstChild("CultivationEvents")
+        if cultEvents then
+            local rList = {}
+            for _, child in ipairs(cultEvents:GetChildren()) do
+                table.insert(rList, "Remote: " .. child.Name .. " [" .. child.ClassName .. "]")
+            end
+            table.sort(rList)
+            for _, line in ipairs(rList) do
+                addRaw(line)
+            end
+        end
+
+        addRaw("\n=== 3. WORKSPACE CONTAINERS & WORLD BOSS ===")
+        local wsList = {}
+        for _, child in ipairs(workspace:GetChildren()) do
+            if child:IsA("Folder") or child:IsA("Model") then
+                table.insert(wsList, "Workspace." .. child.Name .. " [" .. child.ClassName .. "]")
+            end
+        end
+        table.sort(wsList)
+        for _, line in ipairs(wsList) do
+            addRaw(line)
+        end
+
+        local wb = workspace:FindFirstChild("WorldBoss")
+        if wb then
+            local wbAttrs = wb:GetAttributes()
+            local wbKeys = {}
+            for k in pairs(wbAttrs) do
+                table.insert(wbKeys, k)
+            end
+            table.sort(wbKeys)
+            for _, k in ipairs(wbKeys) do
+                if k ~= "SpawnAt" then
+                    addRaw("WorldBoss.Attr." .. tostring(k) .. " = " .. tostring(wbAttrs[k]))
+                end
+            end
+        end
+
+        addRaw("\n=== 4. PLAYER ATTRIBUTES (KEYS) ===")
+        local pKeys = {}
+        for k in pairs(LocalPlayer:GetAttributes()) do
+            table.insert(pKeys, "Player.Attr." .. tostring(k))
+        end
+        table.sort(pKeys)
+        for _, line in ipairs(pKeys) do
+            addRaw(line)
+        end
+
+        local currentText = table.concat(rawLines, "\n")
+
+        -- อ่าน Snapshot เก่าจากไฟล์หรือหน่วยความจำเพื่อเทียบความแตกต่าง
+        local snapshotFile = "murim_rules_snapshot.txt"
+        local oldText = Env.lastRulesSnapshot
+        if not oldText and type(isfile) == "function" and type(readfile) == "function" then
+            pcall(function()
+                if isfile(snapshotFile) then
+                    oldText = readfile(snapshotFile)
+                end
+            end)
+        end
+
+        local diffHeader = ""
+        if oldText and oldText ~= "" then
+            local oldSet, newSet = {}, {}
+            for line in oldText:gmatch("[^\r\n]+") do
+                if line ~= "" and not line:find("^===") then
+                    oldSet[line] = true
+                end
+            end
+            for line in currentText:gmatch("[^\r\n]+") do
+                if line ~= "" and not line:find("^===") then
+                    newSet[line] = true
+                end
+            end
+
+            local added, removed = {}, {}
+            for line in pairs(newSet) do
+                if not oldSet[line] then
+                    table.insert(added, "+ " .. line)
+                end
+            end
+            for line in pairs(oldSet) do
+                if not newSet[line] then
+                    table.insert(removed, "- " .. line)
+                end
+            end
+            table.sort(added)
+            table.sort(removed)
+
+            if #added > 0 or #removed > 0 then
+                diffHeader = "🆕 === สิ่งที่เพิ่ม/เปลี่ยนแปลงจากครั้งก่อน (" .. (#added + #removed) .. " รายการ) ===\n"
+                if #added > 0 then
+                    diffHeader = diffHeader .. table.concat(added, "\n") .. "\n"
+                end
+                if #removed > 0 then
+                    diffHeader = diffHeader .. table.concat(removed, "\n") .. "\n"
+                end
+                diffHeader = diffHeader .. "\n"
+            else
+                diffHeader = "✅ === ไม่พบค่า Rules หรือ Remotes ที่เปลี่ยนไปจากครั้งก่อน ===\n\n"
+            end
+        else
+            Env.lastRulesSnapshot = currentText
+            if type(writefile) == "function" then
+                pcall(writefile, snapshotFile, currentText)
+            end
+            diffHeader = "💾 === บันทึก Snapshot ครั้งแรกเรียบร้อยแล้ว (กดเช็กครั้งหน้าจะเทียบให้อัตโนมัติ) ===\n\n"
+        end
+
+        return diffHeader .. currentText, currentText, snapshotFile
     end
 
     local CultivationEvents = ReplicatedStorage:FindFirstChild("CultivationEvents")
@@ -576,7 +761,6 @@ do
     end
 
     function Hub.Fn.getWorldBossStandCFrame(bossModel, bossHrp)
-        -- ใช้หลักการเดียวกับ BossReach: หาจุดบนผิวชิ้นส่วนของบอสที่ใกล้ตัวเราที่สุด เพื่อไม่ให้หลุดระยะตี
         local _, playerHrp = Hub.Fn.getCharacter()
         local refPos = playerHrp and playerHrp.Position or bossHrp.Position
         local closestSurface, bestDist = nil, math.huge
@@ -600,7 +784,6 @@ do
         end
 
         if closestSurface then
-            -- ยืนชิดผิวตัวบอสในระยะปลอดภัย (ห่างจากผิว 4 Studs อยู่ใน BossReach.PAD = 8)
             local dir = (refPos - closestSurface)
             local flatDir = Vector3.new(dir.X, 0, dir.Z)
             if flatDir.Magnitude < 0.1 then
@@ -702,7 +885,6 @@ do
                 if wasFightingBoss then
                     wasFightingBoss = false
                     Hub.Fn.logDebug("🐉 จบรอบ World Boss! กลับสู่โหมดฟาร์มปกติ")
-                    -- เช็กและเปิดกล่อง Sovereign's Coffer หากโผล่ใกล้ตัว
                     local fxFolder = workspace:FindFirstChild("WorldBossFX")
                     if fxFolder and fireproximityprompt then
                         for _, desc in ipairs(fxFolder:GetDescendants()) do
@@ -878,7 +1060,6 @@ do
 
     local function getTargetContainers()
         local result = {}
-        -- ไม่รวม WorldBoss เข้าในลิสต์มอนทั่วไป เพื่อแยกจัดการโดยระบบ World Boss โดยเฉพาะ
         for _, name in ipairs({ "BanditCamp", "CultivatorCamps", "BlockingDummy", "TrainingDummy" }) do
             local container = workspace:FindFirstChild(name)
             if container then
@@ -1129,7 +1310,6 @@ do
         end
 
         while State.isFarmingMob do
-            -- แทรกคิว: หาก World Boss เกิด หรือกำลังทำ Sect Clash ให้หยุดฟาร์มมอนชั่วคราว
             if Hub.Fn.isWorldBossActive() then
                 resetHitboxes()
                 if UI.TargetHPLabel then
@@ -1797,7 +1977,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V25 (+Auto World Boss)"
+    TitleLabel.Text = "Murim Hub V26 (+Rules Checker)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -1822,7 +2002,7 @@ do
     UI.ScrollFrame.BorderSizePixel = 0
     UI.ScrollFrame.ScrollBarThickness = 5
     UI.ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 120)
-    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1800)
+    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1850)
     UI.ScrollFrame.Parent = MainFrame
 
     local scrollLayout = Instance.new("UIListLayout")
@@ -1905,13 +2085,13 @@ do
         return btn
     end
 
-    -- หมวด Debug & Error Log
-    createCategoryHeader("🛠️ DEBUG & ERROR LOG", 0)
+    -- หมวด Debug, Rules Checker & Error Log
+    createCategoryHeader("🛠️ DEBUG & GAME RULES CHECKER", 0)
     UI.DebugBox = Instance.new("TextBox")
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V25 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V26 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -1923,19 +2103,38 @@ do
     UI.DebugBox.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.DebugBox).CornerRadius = UDim.new(0, 5)
 
-    local OpenErrGuiBtn = createButton("📋 เปิดหน้าต่าง Error / Copy Log", Color3.fromRGB(70, 95, 130), 2)
+    local CheckRulesBtn = createButton("🔍 Check Game Rules & Updates (เทียบแพตช์)", Color3.fromRGB(45, 125, 110), 2)
+    Hub.Fn.connect(CheckRulesBtn.MouseButton1Click, function()
+        local reportText, rawSnapshot, snapshotFile = Hub.Fn.inspectGameRules()
+        showDebugErrorGui(
+            "🔍 Game Rules, Remotes & Patch Diff",
+            reportText,
+            "💾 Save Snapshot",
+            function(btn)
+                Env.lastRulesSnapshot = rawSnapshot
+                if type(writefile) == "function" then
+                    pcall(writefile, snapshotFile, rawSnapshot)
+                end
+                btn.Text = "✅ Saved!"
+                task.wait(1.5)
+                btn.Text = "💾 Save Snapshot"
+            end
+        )
+    end)
+
+    local OpenErrGuiBtn = createButton("📋 เปิดหน้าต่าง Error / Copy Log", Color3.fromRGB(70, 95, 130), 3)
     Hub.Fn.connect(OpenErrGuiBtn.MouseButton1Click, function()
-        showDebugErrorGui("Murim Hub Log & Last Error", "Last Error:\n" .. tostring(Env.lastErrorText) .. "\n\nRecent Logs:\n" .. UI.DebugBox.Text)
+        showDebugErrorGui("⚠️ Murim Hub Log & Last Error", "Last Error:\n" .. tostring(Env.lastErrorText) .. "\n\nRecent Logs:\n" .. UI.DebugBox.Text)
     end)
 
     -- หมวด Combat, World Boss & Sect Clash Event
-    createCategoryHeader("⚔️ COMBAT, WORLD BOSS & EVENTS", 3)
-    local RefreshMobListBtn = createButton("🔄 สแกนรายชื่อมอนสเตอร์ในแมพ", Color3.fromRGB(40, 90, 140), 4)
+    createCategoryHeader("⚔️ COMBAT, WORLD BOSS & EVENTS", 4)
+    local RefreshMobListBtn = createButton("🔄 สแกนรายชื่อมอนสเตอร์ในแมพ", Color3.fromRGB(40, 90, 140), 5)
 
     UI.MobListContainer = Instance.new("Frame")
     UI.MobListContainer.Size = UDim2.new(1, 0, 0, 0)
     UI.MobListContainer.BackgroundTransparency = 1
-    UI.MobListContainer.LayoutOrder = 5
+    UI.MobListContainer.LayoutOrder = 6
     UI.MobListContainer.Parent = UI.ScrollFrame
 
     local mobListLayout = Instance.new("UIListLayout")
@@ -1953,15 +2152,15 @@ do
     UI.TargetHPLabel.Text = "🎯 Target: Standby (รอการทำงาน)"
     UI.TargetHPLabel.Font = Enum.Font.SourceSansBold
     UI.TargetHPLabel.TextSize = 11
-    UI.TargetHPLabel.LayoutOrder = 6
+    UI.TargetHPLabel.LayoutOrder = 7
     UI.TargetHPLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.TargetHPLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleMobBtn = createButton("⚔️ Start Auto Farm Monsters", Color3.fromRGB(180, 50, 50), 7)
-    local ToggleTurboBtn = createButton("⚡ Turbo Speed Attack (ตีโคตรเร็ว): ON", Color3.fromRGB(220, 120, 20), 8)
-    local ToggleAoEBtn = createButton("💥 Multi-Hit AoE (ตีกลุ่มพร้อมกัน): ON", Color3.fromRGB(160, 60, 160), 9)
-    local ToggleSkillsBtn = createButton("🔥 Auto Spam Skills (Z,X,C,V)", Color3.fromRGB(200, 80, 30), 10)
-    local ToggleOffsetBtn = createButton("📍 Distance Offset: " .. Config.farmOffsets[State.farmOffsetIndex].text, Color3.fromRGB(80, 80, 120), 11)
+    local ToggleMobBtn = createButton("⚔️ Start Auto Farm Monsters", Color3.fromRGB(180, 50, 50), 8)
+    local ToggleTurboBtn = createButton("⚡ Turbo Speed Attack (ตีโคตรเร็ว): ON", Color3.fromRGB(220, 120, 20), 9)
+    local ToggleAoEBtn = createButton("💥 Multi-Hit AoE (ตีกลุ่มพร้อมกัน): ON", Color3.fromRGB(160, 60, 160), 10)
+    local ToggleSkillsBtn = createButton("🔥 Auto Spam Skills (Z,X,C,V)", Color3.fromRGB(200, 80, 30), 11)
+    local ToggleOffsetBtn = createButton("📍 Distance Offset: " .. Config.farmOffsets[State.farmOffsetIndex].text, Color3.fromRGB(80, 80, 120), 12)
 
     UI.WorldBossStatusLabel = Instance.new("TextLabel")
     UI.WorldBossStatusLabel.Size = UDim2.new(1, 0, 0, 22)
@@ -1970,11 +2169,11 @@ do
     UI.WorldBossStatusLabel.Text = "🐉 World Boss: OFF"
     UI.WorldBossStatusLabel.Font = Enum.Font.SourceSansBold
     UI.WorldBossStatusLabel.TextSize = 11
-    UI.WorldBossStatusLabel.LayoutOrder = 12
+    UI.WorldBossStatusLabel.LayoutOrder = 13
     UI.WorldBossStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.WorldBossStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleWorldBossBtn = createButton("🐉 Auto World Boss (แทรกคิวอัตโนมัติ): OFF", Color3.fromRGB(100, 100, 100), 13)
+    local ToggleWorldBossBtn = createButton("🐉 Auto World Boss (แทรกคิวอัตโนมัติ): OFF", Color3.fromRGB(100, 100, 100), 14)
 
     UI.EventStatusLabel = Instance.new("TextLabel")
     UI.EventStatusLabel.Size = UDim2.new(1, 0, 0, 22)
@@ -1983,11 +2182,11 @@ do
     UI.EventStatusLabel.Text = "🚩 Event: OFF"
     UI.EventStatusLabel.Font = Enum.Font.SourceSansBold
     UI.EventStatusLabel.TextSize = 11
-    UI.EventStatusLabel.LayoutOrder = 14
+    UI.EventStatusLabel.LayoutOrder = 15
     UI.EventStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.EventStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleMapEventBtn = createButton("🚩 Auto Sect Clash Event: OFF", Color3.fromRGB(100, 100, 100), 15)
+    local ToggleMapEventBtn = createButton("🚩 Auto Sect Clash Event: OFF", Color3.fromRGB(100, 100, 100), 16)
 
     Hub.Fn.connect(RefreshMobListBtn.MouseButton1Click, Hub.Fn.rebuildMobListUI)
     Hub.Fn.connect(ToggleTurboBtn.MouseButton1Click, function()
@@ -2031,29 +2230,29 @@ do
     end)
 
     -- หมวด Cultivation, Gathering & Alchemy
-    createCategoryHeader("✨ CULTIVATION & BREAKTHROUGH", 16)
-    local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 17)
-    local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 18)
-    local ToggleBodyBreakthroughBtn = createButton("💪 Auto Body Breakthrough (ทะลวงขั้นร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 19)
-    local TogglePushupBtn = createButton("🏋️‍♂️ Start Auto Pushup (วิดพื้น/ฝึกร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 20)
-    local ToggleTribulationBtn = createButton("⚡ Auto Tribulation (ดูดซับทัณฑ์สวรรค์): OFF", Color3.fromRGB(100, 100, 100), 21)
-    local ToggleSoulBtn = createButton("👻 Auto Soul & Catch (ส่งจิตจับวิญญาณ): OFF", Color3.fromRGB(100, 100, 100), 22)
-    local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 23)
-    local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 24)
+    createCategoryHeader("✨ CULTIVATION & BREAKTHROUGH", 17)
+    local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 18)
+    local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 19)
+    local ToggleBodyBreakthroughBtn = createButton("💪 Auto Body Breakthrough (ทะลวงขั้นร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 20)
+    local TogglePushupBtn = createButton("🏋️‍♂️ Start Auto Pushup (วิดพื้น/ฝึกร่างกาย): OFF", Color3.fromRGB(100, 100, 100), 21)
+    local ToggleTribulationBtn = createButton("⚡ Auto Tribulation (ดูดซับทัณฑ์สวรรค์): OFF", Color3.fromRGB(100, 100, 100), 22)
+    local ToggleSoulBtn = createButton("👻 Auto Soul & Catch (ส่งจิตจับวิญญาณ): OFF", Color3.fromRGB(100, 100, 100), 23)
+    local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 24)
+    local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 25)
 
-    createCategoryHeader("🌿 GATHERING & DYNAMIC MAP STREAMER", 25)
-    local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Smart All-Map)", Color3.fromRGB(40, 160, 80), 26)
-    local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 27)
-    local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 28)
+    createCategoryHeader("🌿 GATHERING & DYNAMIC MAP STREAMER", 26)
+    local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Smart All-Map)", Color3.fromRGB(40, 160, 80), 27)
+    local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 28)
+    local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 29)
 
-    createCategoryHeader("⚗️ ALCHEMY & BUFF PILLS", 29)
-    local ToggleRecipeBtn = createButton("💊 Recipe: " .. Config.recipeList[1].name, Color3.fromRGB(70, 120, 170), 30)
-    local ToggleYearBtn = createButton("🎯 Min Herb Year: Any (All)", Color3.fromRGB(70, 70, 110), 31)
-    local ToggleBrewBtn = createButton("⚗️ Start Auto Brew Pills", Color3.fromRGB(140, 50, 140), 32)
+    createCategoryHeader("⚗️ ALCHEMY & BUFF PILLS", 30)
+    local ToggleRecipeBtn = createButton("💊 Recipe: " .. Config.recipeList[1].name, Color3.fromRGB(70, 120, 170), 31)
+    local ToggleYearBtn = createButton("🎯 Min Herb Year: Any (All)", Color3.fromRGB(70, 70, 110), 32)
+    local ToggleBrewBtn = createButton("⚗️ Start Auto Brew Pills", Color3.fromRGB(140, 50, 140), 33)
 
-    createCategoryHeader("⚙️ SYSTEM & REWARDS", 33)
-    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 34)
-    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 35)
+    createCategoryHeader("⚙️ SYSTEM & REWARDS", 34)
+    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 35)
+    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 36)
 
     Hub.Fn.connect(ToggleCultivateBtn.MouseButton1Click, function()
         State.isAutoCultivate = not State.isAutoCultivate
@@ -2175,5 +2374,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V25! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V26! (จุดสตรีม: " .. #Hub.Fn.getDynamicStreamPoints() .. " จุด)")
 end
