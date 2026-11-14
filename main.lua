@@ -667,13 +667,12 @@ do
     end
 end
 
--- 2. ระบบ Events Listeners, Perfect Stoke, Auto Alchemy Exam Solver (ตอบถูก 100% ทุกข้อ!)
+-- 2. ระบบ Events Listeners, Perfect Stoke, Auto Alchemy Exam Solver (ตรงโครงสร้าง HerbModule.Herbs / PillModule.Pills 100%)
 do
     local Env = Hub.Env
     local State = Hub.State
     local UI = Hub.UI
 
-    -- ฟังก์ชันคำนวณคำตอบข้อสอบนักปรุงยาจากฐานข้อมูลในเกม (HerbModule / PillModule / AlchemyRankRules)
     function Hub.Fn.solveAlchemyQuiz(qData)
         if type(qData) ~= "table" or type(qData.options) ~= "table" then
             return 1
@@ -688,19 +687,22 @@ do
         local PillMod = Env.Modules.PillModule or {}
         local RankMod = Env.Modules.AlchemyRankRules or {}
 
-        local herbs = HerbMod.HERBS or HerbMod.herbs or HerbMod
-        local pills = PillMod.PILLS or PillMod.pills or PillMod
-        local years = HerbMod.YEARS or HerbMod.years or PillMod.YEARS or PillMod.years
-        local whereMap = HerbMod.WHERE or HerbMod.where or PillMod.WHERE or PillMod.where
+        local herbs = HerbMod.Herbs or {}
+        local pills = PillMod.Pills or {}
+        local yearTiers = HerbMod.YearTiers or {}
+        local whereMap = HerbMod.WHERE or {}
+
+        local function cleanStr(s)
+            return tostring(s or ""):lower():gsub("^%s*(.-)%s*$", "%1")
+        end
 
         local function findOption(targetStr)
             if not targetStr then
                 return nil
             end
-            local cleanTarget = tostring(targetStr):lower():gsub("^%s*(.-)%s*$", "%1")
+            local ct = cleanStr(targetStr)
             for idx, opt in ipairs(options) do
-                local cleanOpt = tostring(opt):lower():gsub("^%s*(.-)%s*$", "%1")
-                if cleanOpt == cleanTarget then
+                if cleanStr(opt) == ct then
                     return idx
                 end
             end
@@ -708,10 +710,26 @@ do
         end
 
         -- 1. ข้อสอบรูปภาพสมุนไพร ("Which herb is this?")
+        -- หมายเหตุ: imageId ของ herb id 1..5 ซ้ำกับ id 11..15 (Spirit) และ 16..21 (Alchemy)
+        -- ดังนั้นต้องเช็กเฉพาะตัวที่ชื่ออยู่ใน options โดยเช็ก id 1..5 ก่อนเสมอ!
         if qData.image and type(herbs) == "table" then
             local targetImg = tostring(qData.image)
             local imgNum = targetImg:match("(%d+)")
-            for _, h in pairs(herbs) do
+
+            local orderedIds = {}
+            for id = 1, 5 do
+                if herbs[id] then
+                    table.insert(orderedIds, id)
+                end
+            end
+            for id in pairs(herbs) do
+                if type(id) ~= "number" or id < 1 or id > 5 then
+                    table.insert(orderedIds, id)
+                end
+            end
+
+            for _, id in ipairs(orderedIds) do
+                local h = herbs[id]
                 if type(h) == "table" and h.name and h.imageId then
                     local hImg = tostring(h.imageId)
                     if hImg == targetImg or (imgNum and hImg:find(imgNum, 1, true)) then
@@ -730,7 +748,7 @@ do
             if recipePart then
                 local counts = {}
                 for hName in recipePart:gmatch("[^+]+") do
-                    local clean = hName:gsub("^%s*(.-)%s*$", "%1"):lower()
+                    local clean = cleanStr(hName)
                     counts[clean] = (counts[clean] or 0) + 1
                 end
                 for _, p in pairs(pills) do
@@ -739,7 +757,7 @@ do
                         for _, hId in ipairs(p.recipe) do
                             local hObj = herbs[hId]
                             if type(hObj) == "table" and hObj.name then
-                                local clean = tostring(hObj.name):lower()
+                                local clean = cleanStr(hObj.name)
                                 pCounts[clean] = (pCounts[clean] or 0) + 1
                             end
                         end
@@ -772,7 +790,7 @@ do
             local pillName = text:match("^Which herb goes into the (.-)%?$")
             if pillName then
                 for _, p in pairs(pills) do
-                    if type(p) == "table" and p.name and tostring(p.name):lower() == pillName:lower() and type(p.recipe) == "table" then
+                    if type(p) == "table" and p.name and cleanStr(p.name) == cleanStr(pillName) and type(p.recipe) == "table" then
                         for _, hId in ipairs(p.recipe) do
                             local hObj = herbs[hId]
                             if type(hObj) == "table" and hObj.name then
@@ -789,8 +807,8 @@ do
 
         -- 4. ข้อสอบถามอายุสมุนไพร ("Which herbs brew the strongest pills?" / "Three ... herbs always brew a pill of which tier?")
         if text == "Which herbs brew the strongest pills?" then
-            if type(years) == "table" and #years > 0 and type(years[#years]) == "table" and years[#years].label then
-                local idx = findOption(years[#years].label)
+            if type(yearTiers) == "table" and #yearTiers > 0 and type(yearTiers[#yearTiers]) == "table" and yearTiers[#yearTiers].label then
+                local idx = findOption(yearTiers[#yearTiers].label)
                 if idx then
                     return idx
                 end
@@ -803,9 +821,7 @@ do
         end
 
         if text:find("always brew a pill of which tier%?") then
-            local topTier = (type(PillMod) == "table" and (PillMod.TOP_BAND_TIER or PillMod.topBandTier))
-                or (type(HerbMod) == "table" and (HerbMod.TOP_BAND_TIER or HerbMod.topBandTier))
-                or 5
+            local topTier = tonumber(RankMod.MAX_NORMAL_TIER) or 5
             local idx = findOption("Tier " .. tostring(topTier))
             if idx then
                 return idx
@@ -817,8 +833,8 @@ do
             local herbName = text:match("^Where does the (.-) grow%?$")
             if herbName then
                 for _, h in pairs(herbs) do
-                    if type(h) == "table" and h.name and tostring(h.name):lower() == herbName:lower() and h.grows then
-                        local locStr = (type(whereMap) == "table" and whereMap[h.grows]) or tostring(h.grows)
+                    if type(h) == "table" and h.name and cleanStr(h.name) == cleanStr(herbName) and h.grows then
+                        local locStr = whereMap[h.grows] or tostring(h.grows)
                         local idx = findOption(locStr)
                         if idx then
                             return idx
@@ -852,12 +868,13 @@ do
             local pillName = text:match("^Which alchemist can first brew the (.-)%?$")
             if pillName then
                 for _, p in pairs(pills) do
-                    if type(p) == "table" and p.name and tostring(p.name):lower() == pillName:lower() and p.rank then
+                    if type(p) == "table" and p.name and cleanStr(p.name) == cleanStr(pillName) then
+                        local reqRank = tonumber(p.rank) or 1
                         local titleStr
                         if type(RankMod.title) == "function" then
-                            titleStr = RankMod.title(p.rank)
-                        elseif type(RankMod.NAMES) == "table" then
-                            titleStr = "Rank-" .. tostring(RankMod.NAMES[p.rank]) .. " Alchemist"
+                            titleStr = RankMod.title(reqRank)
+                        elseif type(RankMod.NAMES) == "table" and RankMod.NAMES[reqRank] then
+                            titleStr = "Rank-" .. tostring(RankMod.NAMES[reqRank]) .. " Alchemist"
                         end
                         local idx = findOption(titleStr)
                         if idx then
@@ -2471,7 +2488,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V33 (100% Quiz Solver)"
+    TitleLabel.Text = "Murim Hub V34 (Fixed Quiz DB)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -2585,7 +2602,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V33 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V34 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2946,5 +2963,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V33! (ระบบเฉลยข้อสอบ 100% ทุกแนวโจทย์)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V34! (แก้ระบบเฉลยข้อสอบตามโครงสร้าง HerbModule.Herbs / PillModule.Pills 100%)")
 end
