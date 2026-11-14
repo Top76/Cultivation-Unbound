@@ -163,7 +163,8 @@ local Hub = {
         lastRulesSnapshot = nil,
         currentZoneSeed = nil,
         brewStartedAt = 0,
-        stokedThisRound = false
+        stokedThisRound = false,
+        examStageActive = false
     },
     UI = {},
     Config = {},
@@ -176,7 +177,6 @@ do
     local Env = Hub.Env
     local UI = Hub.UI
 
-    -- โหลด Game Modules สำหรับ Alchemy & Exam
     for _, modName in ipairs({ "HerbModule", "PillModule", "BrewMinigame", "AlchemyExamRules", "AlchemyRankRules" }) do
         local modObj = ReplicatedStorage:FindFirstChild(modName)
         if modObj and modObj:IsA("ModuleScript") then
@@ -309,39 +309,7 @@ do
             end
         end
 
-        addRaw("\n=== 3. WORKSPACE CONTAINERS & WORLD BOSS ===")
-        local wsList = {}
-        for _, child in ipairs(workspace:GetChildren()) do
-            if child:IsA("Folder") or child:IsA("Model") then
-                table.insert(wsList, "Workspace." .. child.Name .. " [" .. child.ClassName .. "]")
-            end
-        end
-        table.sort(wsList)
-        for _, line in ipairs(wsList) do
-            addRaw(line)
-        end
-
-        local wb = workspace:FindFirstChild("WorldBoss")
-        if wb then
-            for k, v in pairs(wb:GetAttributes()) do
-                if k ~= "SpawnAt" then
-                    addRaw("WorldBoss.Attr." .. tostring(k) .. " = " .. tostring(v))
-                end
-            end
-        end
-
-        addRaw("\n=== 4. PLAYER ATTRIBUTES (KEYS) ===")
-        local pKeys = {}
-        for k in pairs(LocalPlayer:GetAttributes()) do
-            table.insert(pKeys, "Player.Attr." .. tostring(k))
-        end
-        table.sort(pKeys)
-        for _, line in ipairs(pKeys) do
-            addRaw(line)
-        end
-
         local currentText = table.concat(rawLines, "\n")
-
         local snapshotFile = "murim_rules_snapshot.txt"
         local oldText = Env.lastRulesSnapshot
         if not oldText and type(isfile) == "function" and type(readfile) == "function" then
@@ -450,18 +418,12 @@ do
         end)
     end)
 
-    -- สูตรยาครบทั้ง 12 สูตรจาก ReplicatedStorage.PillModule & HerbModule
     Hub.Config = {
         herbModes = {
             "1000Yr Sniper + All Herbs",
             "Only 1000-Year (เฉพาะ 1000 ปี)"
         },
         recipeList = {
-            {
-                name = "⚡ Auto Any (ปรุงมั่ว - สมุนไพรธรรมดาซ้ำ 3 ชิ้น)",
-                mode = "any_normal",
-                ingredients = nil
-            },
             {
                 name = "🐾 Spirit Pill (อาหารสัตว์อสูร - Spirit Herbs x3)",
                 mode = "spirit",
@@ -709,17 +671,22 @@ end
 do
     local Env = Hub.Env
     local State = Hub.State
-    local Config = Hub.Config
     local UI = Hub.UI
 
-    -- คำนวณเวลา Perfect Stoke จาก BrewMinigame
     function Hub.Fn.performPerfectStoke(zoneSeed, startTime)
         local BrewMinigame = Env.Modules.BrewMinigame
-        if not BrewMinigame or not Env.Remotes.CauldronStoke then
+        if not Env.Remotes.CauldronStoke then
+            return
+        end
+        if not BrewMinigame or type(BrewMinigame.zoneFor) ~= "function" then
+            task.wait(0.35)
+            Env.Remotes.CauldronStoke:FireServer(0.35)
+            Env.stokedThisRound = true
             return
         end
         local targetPos = BrewMinigame.zoneFor(zoneSeed)
-        local idealPressTime = targetPos * BrewMinigame.PERIOD
+        local period = tonumber(BrewMinigame.PERIOD) or 1.2
+        local idealPressTime = targetPos * period
         local elapsed = os.clock() - startTime
         local waitTime = idealPressTime - elapsed
         if waitTime > 0 then
@@ -728,71 +695,6 @@ do
         Env.Remotes.CauldronStoke:FireServer(idealPressTime)
         Env.stokedThisRound = true
         Hub.Fn.logDebug(string.format("🔥 Perfect Stoke! Target=%.2f (%.2fs)", targetPos, idealPressTime))
-    end
-
-    -- แก้โจทย์คำถามสอบเลื่อนขั้นนักปรุงยา (7 รูปแบบจาก HerbModule & PillModule)
-    function Hub.Fn.solveAlchemyQuiz(payload)
-        local HerbModule = Env.Modules.HerbModule
-        local PillModule = Env.Modules.PillModule
-        local options = payload.options or {}
-        if not HerbModule or not PillModule or #options == 0 then
-            return 1
-        end
-
-        local qType = tostring(payload.type or payload.kind or "")
-        local herbId = payload.herbId or payload.herb
-        local pillKey = payload.pillKey or payload.pill
-
-        for idx, opt in ipairs(options) do
-            local optStr = tostring(opt)
-
-            if herbId then
-                local hData = HerbModule.GetHerbByType and HerbModule.GetHerbByType(herbId) or HerbModule.Herbs[herbId]
-                if hData then
-                    if qType == "where" and hData.grows and HerbModule.WHERE[hData.grows] == optStr then
-                        return idx
-                    elseif qType == "spirit" then
-                        local isSp = (hData.spirit == true)
-                        if (isSp and optStr:lower():find("yes")) or (not isSp and optStr:lower():find("no")) then
-                            return idx
-                        end
-                    elseif qType == "picture" and hData.name == optStr then
-                        return idx
-                    end
-                end
-            end
-
-            if pillKey then
-                local pData = PillModule.GetPill and PillModule.GetPill(pillKey) or PillModule.Pills[pillKey]
-                if pData then
-                    if qType == "rank" and tostring(pData.rank or 1) == optStr then
-                        return idx
-                    elseif (qType == "makes" or qType == "picture") and pData.name == optStr then
-                        return idx
-                    elseif qType == "needs" and type(pData.recipe) == "table" then
-                        local names = {}
-                        for _, rId in ipairs(pData.recipe) do
-                            local rh = HerbModule.Herbs[rId]
-                            if rh then
-                                table.insert(names, rh.name)
-                            end
-                        end
-                        local matched = true
-                        for _, n in ipairs(names) do
-                            if not optStr:find(n, 1, true) then
-                                matched = false
-                                break
-                            end
-                        end
-                        if matched and #names > 0 then
-                            return idx
-                        end
-                    end
-                end
-            end
-        end
-
-        return 1
     end
 
     if Env.Remotes.HerbInventoryUpdate then
@@ -835,46 +737,144 @@ do
     end
 
     if Env.Remotes.AlchemyExam then
-        Hub.Fn.connect(Env.Remotes.AlchemyExam.OnClientEvent, function(action, payload)
+        Hub.Fn.connect(Env.Remotes.AlchemyExam.OnClientEvent, function(action, p1, p2, p3)
             if not State.isAutoAlchemyExam then
                 return
             end
-            if (action == "question" or action == "quiz") and type(payload) == "table" then
-                task.wait(0.35)
-                local ansIdx = Hub.Fn.solveAlchemyQuiz(payload)
-                Env.Remotes.AlchemyExam:FireServer("answer", payload.index or payload.qIndex or 1, ansIdx)
+
+            if action == "open" and type(p1) == "table" then
+                if p1.canStart then
+                    if UI.ExamStatusLabel then
+                        UI.ExamStatusLabel.Text = "🎓 Exam: กำลังเริ่มสอบ Rank " .. tostring(p1.rank)
+                        UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(130, 235, 160)
+                    end
+                    task.delay(0.35, function()
+                        if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
+                            Env.Remotes.AlchemyExam:FireServer("begin")
+                        end
+                    end)
+                else
+                    if UI.ExamStatusLabel then
+                        UI.ExamStatusLabel.Text = "🎓 Exam: " .. tostring(p1.why or "เงื่อนไขยังไม่ครบ")
+                        UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(255, 150, 120)
+                    end
+                end
+
+            elseif action == "quiz" and type(p3) == "table" then
+                local qIndex = p1
+                local totalQ = p2
+                local ansIdx = p3.answer or 1
                 if UI.ExamStatusLabel then
-                    UI.ExamStatusLabel.Text = "🎓 Exam: ตอบคำถามข้อที่ " .. tostring(payload.index or 1)
+                    UI.ExamStatusLabel.Text = string.format("🎓 Exam: ตอบคำถาม %s/%s (ข้อ %s)", tostring(qIndex), tostring(totalQ), tostring(ansIdx))
                     UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(130, 235, 160)
                 end
-            elseif (action == "trialBrew" or action == "brew") and type(payload) == "table" then
-                local period = tonumber(payload.period) or 1.4
-                local targetZone = tonumber(payload.target) or 0.5
-                local waitT = targetZone * period
-                task.delay(waitT, function()
+                task.delay(0.45, function()
                     if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
-                        Env.Remotes.AlchemyExam:FireServer("stoke", waitT)
-                        if UI.ExamStatusLabel then
-                            UI.ExamStatusLabel.Text = "🎓 Exam: คุมไฟสอบสำเร็จ!"
-                        end
+                        Env.Remotes.AlchemyExam:FireServer("answer", qIndex, ansIdx)
                     end
                 end)
-            elseif (action == "bolt" or action == "tribulation") and type(payload) == "table" then
-                local delayT = math.max(0.05, (tonumber(payload.hitIn or payload.delay) or 1.0) - 0.1)
-                local boltIdx = payload.index or 1
-                local lane = payload.lane or "Centre"
-                task.delay(delayT, function()
-                    if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
-                        Env.Remotes.AlchemyExam:FireServer("guard", boltIdx, lane, os.clock())
-                        if UI.ExamStatusLabel then
-                            UI.ExamStatusLabel.Text = "🎓 Exam: กันสายฟ้าเลน " .. tostring(lane)
-                        end
+
+            elseif action == "gather" and type(p1) == "table" then
+                if p1.haveAll then
+                    if UI.ExamStatusLabel then
+                        UI.ExamStatusLabel.Text = "🎓 Exam: ส่งวัตถุดิบเริ่มต้มทดสอบ!"
+                        UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(130, 235, 160)
                     end
-                end)
-            elseif action == "result" or action == "end" then
+                    task.delay(0.4, function()
+                        if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
+                            Env.Remotes.AlchemyExam:FireServer("handIn")
+                        end
+                    end)
+                else
+                    if UI.ExamStatusLabel then
+                        UI.ExamStatusLabel.Text = "🎓 Exam: วัตถุดิบสอบยังไม่ครบ!"
+                        UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(255, 150, 120)
+                    end
+                end
+
+            elseif action == "brew" and type(p3) == "table" then
+                local stageNum = p1
+                local totalStages = p2
+                local brewData = p3
+                local ExamRules = Env.Modules.AlchemyExamRules
+                local startedAt = os.clock()
+                Env.examStageActive = true
+
                 if UI.ExamStatusLabel then
-                    UI.ExamStatusLabel.Text = "🎓 Exam: จบการทดสอบแล้ว"
+                    UI.ExamStatusLabel.Text = string.format("🎓 Exam: คุมไฟด่าน %s/%s...", tostring(stageNum), tostring(totalStages))
                     UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(255, 215, 100)
+                end
+
+                task.spawn(function()
+                    local targetZone = tonumber(brewData.zone) or 0.5
+                    local period = tonumber(brewData.period) or 1.2
+                    local width = tonumber(brewData.width) or 0.15
+                    local limit = tonumber(brewData.limit) or 6
+
+                    while State.isAutoAlchemyExam and Env.examStageActive do
+                        local elapsed = os.clock() - startedAt
+                        if elapsed > limit then
+                            break
+                        end
+                        local pos = (ExamRules and type(ExamRules.flamePos) == "function") and ExamRules.flamePos(elapsed, period) or ((elapsed / period) % 1)
+                        local isHit = (ExamRules and type(ExamRules.brewOk) == "function")
+                            and ExamRules.brewOk(targetZone, pos, width * 0.5)
+                            or (math.abs(pos - targetZone) <= (width * 0.25))
+
+                        if elapsed > 0.25 and isHit then
+                            Env.examStageActive = false
+                            if Env.Remotes.AlchemyExam then
+                                Env.Remotes.AlchemyExam:FireServer("press", stageNum, elapsed)
+                            end
+                            Hub.Fn.logDebug(string.format("🎓 กดไฟสอบด่าน %s สำเร็จ! (%.2fs)", tostring(stageNum), elapsed))
+                            break
+                        end
+                        task.wait(0.015)
+                    end
+                end)
+
+            elseif action == "brewResult" then
+                Env.examStageActive = false
+
+            elseif action == "trib" and type(p1) == "table" then
+                local planData = p1
+                local startedAt = os.clock() + (tonumber(planData.delay) or 0)
+                local planList = planData.plan or {}
+
+                if UI.ExamStatusLabel then
+                    UI.ExamStatusLabel.Text = "🎓 Exam: กำลังรับทัณฑ์สายฟ้า (" .. #planList .. " สาย)"
+                    UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+                end
+
+                for boltIdx, bolt in ipairs(planList) do
+                    task.spawn(function()
+                        local hitTime = tonumber(bolt.at) or 3
+                        local targetPressElapsed = hitTime - 0.15
+                        local waitDur = (startedAt + targetPressElapsed) - os.clock()
+                        if waitDur > 0 then
+                            task.wait(waitDur)
+                        end
+                        if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
+                            local actualElapsed = os.clock() - startedAt
+                            Env.Remotes.AlchemyExam:FireServer("guard", boltIdx, bolt.lane, actualElapsed)
+                            Hub.Fn.logDebug(string.format("⚡ กันสายฟ้าสายที่ %d (เลน %s)", boltIdx, tostring(bolt.lane)))
+                        end
+                    end)
+                end
+
+            elseif action == "pass" and type(p1) == "table" then
+                Env.examStageActive = false
+                if UI.ExamStatusLabel then
+                    UI.ExamStatusLabel.Text = "🎓 Exam: สอบผ่านแล้ว! (" .. tostring(p1.pillName) .. ")"
+                    UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 140)
+                end
+                Hub.Fn.logDebug("🎉 สอบเลื่อนขั้นนักปรุงยาผ่านเรียบร้อย!")
+
+            elseif action == "fail" then
+                Env.examStageActive = false
+                if UI.ExamStatusLabel then
+                    UI.ExamStatusLabel.Text = "🎓 Exam: สอบไม่ผ่าน (" .. tostring(p1) .. ")"
+                    UI.ExamStatusLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
                 end
             end
         end)
@@ -967,11 +967,9 @@ do
                 return centreAttr
             end
         end
-
         if Env.cachedWorldBossArenaPos then
             return Env.cachedWorldBossArenaPos
         end
-
         return Vector3.new(-1150, 35, -1700)
     end
 
@@ -1162,7 +1160,7 @@ do
             end
         end
 
-        for _, pos in ipairs(Config.fallbackZones) do
+        for _, pos in ipairs(Hub.Config.fallbackZones) do
             addPoint(pos)
         end
 
@@ -1655,7 +1653,7 @@ do
     end
 end
 
--- 4. ระบบ Cultivation, Soul Cultivation (1-10 Stars), Runaway Herbs และ Alchemy (12 สูตร + Perfect Stoke)
+-- 4. ระบบ Cultivation, Soul Cultivation, Runaway Herbs และ Alchemy (เฉพาะสูตรตรงตามตำรา)
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -1947,19 +1945,22 @@ do
     local function getBestHerbTarget(fromPos)
         initHerbCache()
         local spiritWorld = workspace:FindFirstChild("SpiritWorld")
-        local herbSpots = workspace:FindFirstChild("HerbSpots")
         local now = os.clock()
         local only1000Yr = (State.herbModeIndex == 2)
         local candidates, seenParts = {}, {}
 
-        local function evaluatePart(part, prompt)
-            if seenParts[part] or not part or not part.Parent then
+        local function evaluatePrompt(prompt)
+            if not prompt or not prompt.Parent or not prompt.Enabled then
+                return
+            end
+            local part = prompt.Parent
+            if not part:IsA("BasePart") or seenParts[part] then
                 return
             end
             if spiritWorld and part:IsDescendantOf(spiritWorld) then
                 return
             end
-            if prompt and not prompt.Enabled then
+            if part:GetAttribute("Picked") == true then
                 return
             end
             seenParts[part] = true
@@ -1982,22 +1983,9 @@ do
             table.insert(candidates, { part = part, prompt = prompt, dist = dist, year = herbYear })
         end
 
-        if herbSpots then
-            for _, spot in ipairs(herbSpots:GetChildren()) do
-                if spot:IsA("BasePart") then
-                    evaluatePart(spot, spot:FindFirstChildOfClass("ProximityPrompt"))
-                end
-            end
-        end
-
         for prompt in pairs(Env.cachedHerbPrompts) do
             if prompt and prompt.Parent then
-                if prompt.Enabled then
-                    local part = prompt.Parent
-                    if part:IsA("BasePart") then
-                        evaluatePart(part, prompt)
-                    end
-                end
+                evaluatePrompt(prompt)
             else
                 Env.cachedHerbPrompts[prompt] = nil
             end
@@ -2035,19 +2023,21 @@ do
                     local herbPart, prompt, _, herbYear = getBestHerbTarget(hrp.Position)
 
                     if herbPart and herbPart.Parent then
+                        Env.collectedCooldowns[herbPart] = os.clock() + 20
                         Hub.Fn.logDebug("พบเป้าหมาย: " .. herbPart.Name .. " (" .. tostring(herbYear) .. "Yr)")
+
                         local initialPos = herbPart.Position
-                        local standCFrame = herbPart.CFrame * CFrame.new(0, 1.5, 1.8)
+                        local standCFrame = herbPart.CFrame * CFrame.new(0, 1.8, 1.8)
                         Hub.Fn.safeTeleport(hrp, standCFrame, herbPart)
-                        Env.groundPlatform.CFrame = standCFrame * CFrame.new(0, -3.2, 0)
+                        Env.groundPlatform.CFrame = standCFrame * CFrame.new(0, -3.5, 0)
 
                         if not prompt then
                             prompt = herbPart:FindFirstChildOfClass("ProximityPrompt")
                         end
 
-                        if State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) then
+                        if State.isFarming and herbPart.Parent and prompt and prompt.Enabled then
                             local beforeCollect = Env.lastHerbCollectedAt
-                            if prompt and fireproximityprompt then
+                            if fireproximityprompt then
                                 pcall(fireproximityprompt, prompt)
                             end
                             if Env.Remotes.CollectHerb then
@@ -2055,18 +2045,18 @@ do
                             end
 
                             local waitStart = os.clock()
-                            while State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) and Env.lastHerbCollectedAt == beforeCollect and (os.clock() - waitStart) < 0.25 do
-                                task.wait(0.03)
+                            while State.isFarming and herbPart.Parent and prompt.Enabled and Env.lastHerbCollectedAt == beforeCollect and (os.clock() - waitStart) < 0.35 do
+                                task.wait(0.04)
                             end
 
                             if herbPart.Parent and (herbPart.Position - initialPos).Magnitude > 2 then
                                 Hub.Fn.logDebug("🏃 สมุนไพรวิ่งหนี! กำลังไล่จับโบนัส x2...")
-                                local chaseDeadline = os.clock() + 11.5
-                                while State.isFarming and herbPart.Parent and os.clock() < chaseDeadline do
-                                    local chaseCF = herbPart.CFrame * CFrame.new(0, 1.5, 1.5)
+                                local chaseDeadline = os.clock() + 10
+                                while State.isFarming and herbPart.Parent and prompt.Enabled and os.clock() < chaseDeadline do
+                                    local chaseCF = herbPart.CFrame * CFrame.new(0, 1.8, 1.5)
                                     Hub.Fn.safeTeleport(hrp, chaseCF, herbPart)
-                                    Env.groundPlatform.CFrame = chaseCF * CFrame.new(0, -3.2, 0)
-                                    if prompt and fireproximityprompt then
+                                    Env.groundPlatform.CFrame = chaseCF * CFrame.new(0, -3.5, 0)
+                                    if fireproximityprompt then
                                         pcall(fireproximityprompt, prompt)
                                     end
                                     if Env.Remotes.CollectHerb then
@@ -2082,54 +2072,49 @@ do
                                 end
                             end
 
-                            local collected = (not herbPart.Parent) or (prompt and not prompt.Enabled) or (Env.lastHerbCollectedAt > beforeCollect)
-                            if collected then
-                                Env.collectedCooldowns[herbPart] = os.clock() + 30
-                                Hub.Fn.logDebug("เก็บสำเร็จ: " .. herbPart.Name)
+                            if (not herbPart.Parent) or (not prompt.Enabled) or (Env.lastHerbCollectedAt > beforeCollect) then
+                                Env.collectedCooldowns[herbPart] = os.clock() + 60
+                                Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name)
                             end
                         end
                     else
-                        if State.isDynamicStream and State.herbModeIndex == 2 then
-                            task.wait(0.3)
-                        else
-                            local streamPoints = Hub.Fn.getDynamicStreamPoints()
-                            if Env.zoneIndex > #streamPoints then
-                                Env.zoneIndex = 1
-                            end
-                            local center = streamPoints[Env.zoneIndex] or Vector3.new(0, 120, 0)
-                            Env.patrolAngle = Env.patrolAngle + (math.pi / 3)
-                            if Env.patrolAngle >= math.pi * 2 then
-                                Env.patrolAngle = 0
-                                Env.zoneIndex = (Env.zoneIndex % math.max(1, #streamPoints)) + 1
-                            end
+                        local streamPoints = Hub.Fn.getDynamicStreamPoints()
+                        if Env.zoneIndex > #streamPoints then
+                            Env.zoneIndex = 1
+                        end
+                        local center = streamPoints[Env.zoneIndex] or Vector3.new(0, 120, 0)
+                        Env.patrolAngle = Env.patrolAngle + (math.pi / 3)
+                        if Env.patrolAngle >= math.pi * 2 then
+                            Env.patrolAngle = 0
+                            Env.zoneIndex = (Env.zoneIndex % math.max(1, #streamPoints)) + 1
+                        end
 
-                            local nextPos = Vector3.new(center.X + math.cos(Env.patrolAngle) * 450, center.Y + 25, center.Z + math.sin(Env.patrolAngle) * 450)
-                            pcall(function()
-                                workspace:RequestStreamAroundAsync(nextPos)
-                            end)
+                        local nextPos = Vector3.new(center.X + math.cos(Env.patrolAngle) * 450, center.Y + 25, center.Z + math.sin(Env.patrolAngle) * 450)
+                        pcall(function()
+                            workspace:RequestStreamAroundAsync(nextPos)
+                        end)
 
-                            local startPos = hrp.Position
-                            local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
+                        local startPos = hrp.Position
+                        local steps = math.max(1, math.ceil((nextPos - startPos).Magnitude / 36))
 
-                            for i = 1, steps do
-                                if not State.isFarming or Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
-                                    break
-                                end
-                                if getBestHerbTarget(hrp.Position) then
-                                    break
-                                end
-                                local stepCFrame = CFrame.new(startPos:Lerp(nextPos, i / steps))
-                                Env.groundPlatform.CFrame = stepCFrame * CFrame.new(0, -3.2, 0)
-                                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                                hrp.CFrame = stepCFrame
-                                task.wait(0.10)
+                        for i = 1, steps do
+                            if not State.isFarming or Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
+                                break
                             end
+                            if getBestHerbTarget(hrp.Position) then
+                                break
+                            end
+                            local stepCFrame = CFrame.new(startPos:Lerp(nextPos, i / steps))
+                            Env.groundPlatform.CFrame = stepCFrame * CFrame.new(0, -3.5, 0)
+                            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                            hrp.CFrame = stepCFrame
+                            task.wait(0.10)
                         end
                     end
                 else
                     task.wait(0.3)
                 end
-                task.wait(0.03)
+                task.wait(0.05)
             end
         end
         Hub.Fn.logDebug("หยุดเก็บสมุนไพรแล้ว")
@@ -2144,6 +2129,7 @@ do
                 Env.Remotes.RequestHerbInventory:FireServer()
             end)
         end
+        task.wait(0.3)
 
         while State.isAutoBrew do
             local rank = tonumber(LocalPlayer:GetAttribute("AlchemyRank")) or 0
@@ -2172,18 +2158,17 @@ do
             else
                 local currentRecipe = Config.recipeList[State.recipeIndex]
 
-                -- โหมดปรุง Spirit Pill (ใช้ Spirit Herbs ID 11-15 จำนวน 3 ชิ้น)
                 if currentRecipe.mode == "spirit" then
                     if Env.Remotes.CauldronStartSpiritBrew then
                         local spiritHerbs = {}
                         for key, count in pairs(Env.myHerbCounts) do
-                            local rawType, yr = string.match(key, "^(.+)_(%d+)$")
-                            local hId = tonumber(rawType)
-                            local yearNum = tonumber(yr) or 0
+                            local rawId, yr = string.match(key, "^(%d+)_(%d+)$")
+                            local hId = tonumber(rawId)
+                            local yearNum = tonumber(yr)
                             if hId and hId >= 11 and hId <= 15 and count and count > 0 and (State.selectedMinYear == 0 or yearNum >= State.selectedMinYear) then
                                 local take = math.min(count, 3 - #spiritHerbs)
                                 for _ = 1, take do
-                                    table.insert(spiritHerbs, { herbType = hId, year = yearNum })
+                                    table.insert(spiritHerbs, { id = hId, year = yearNum })
                                 end
                                 if #spiritHerbs >= 3 then
                                     break
@@ -2194,63 +2179,38 @@ do
                             Env.brewStartedAt = os.clock()
                             Env.stokedThisRound = false
                             Env.Remotes.CauldronStartSpiritBrew:FireServer(spiritHerbs)
+                            Hub.Fn.logDebug("🐾 เริ่มปรุงยา Spirit Pill...")
                         end
                     end
-                elseif Env.Remotes.CauldronStartBrew then
-                    -- โหมดปรุงมั่ว (เฉพาะสมุนไพรปกติ ID < 11 หรือ > 15 เพื่อไม่ให้กิน Spirit Herbs)
-                    if currentRecipe.mode == "any_normal" then
+                elseif Env.Remotes.CauldronStartBrew and currentRecipe.ingredients then
+                    local herbsToBrew, canBrew = {}, true
+                    for _, req in ipairs(currentRecipe.ingredients) do
+                        local foundCount = 0
                         for key, count in pairs(Env.myHerbCounts) do
-                            if count and count >= 3 then
-                                local rawType, yr = string.match(key, "^(.+)_(%d+)$")
-                                if rawType and yr then
-                                    local hType = tonumber(rawType) or rawType
-                                    local yearNum = tonumber(yr) or 0
-                                    local isSpirit = (type(hType) == "number" and hType >= 11 and hType <= 15)
-                                    if not isSpirit and (State.selectedMinYear == 0 or yearNum >= State.selectedMinYear) then
-                                        Env.brewStartedAt = os.clock()
-                                        Env.stokedThisRound = false
-                                        Env.Remotes.CauldronStartBrew:FireServer({
-                                            { herbType = hType, year = yearNum },
-                                            { herbType = hType, year = yearNum },
-                                            { herbType = hType, year = yearNum }
-                                        })
-                                        break
-                                    end
+                            local rawId, yr = string.match(key, "^(%d+)_(%d+)$")
+                            local hId = tonumber(rawId)
+                            local yearNum = tonumber(yr)
+                            if hId == req.id and yearNum and (State.selectedMinYear == 0 or yearNum >= State.selectedMinYear) then
+                                local take = math.min(count, req.count - foundCount)
+                                for _ = 1, take do
+                                    table.insert(herbsToBrew, { id = hId, year = yearNum })
+                                end
+                                foundCount = foundCount + take
+                                if foundCount >= req.count then
+                                    break
                                 end
                             end
                         end
-                    else
-                        -- โหมดปรุงตามสูตรเจาะจง (รวมสูตรเก่า 4 สูตร + สูตรใหม่ 6 สูตร)
-                        local herbsToBrew, canBrew = {}, true
-                        for _, req in ipairs(currentRecipe.ingredients) do
-                            local foundCount = 0
-                            for key, count in pairs(Env.myHerbCounts) do
-                                local rawType, yr = string.match(key, "^(.+)_(%d+)$")
-                                if rawType and yr then
-                                    local hType = tonumber(rawType) or rawType
-                                    local yearNum = tonumber(yr) or 0
-                                    if (hType == req.id or tostring(hType) == tostring(req.id)) and (State.selectedMinYear == 0 or yearNum >= State.selectedMinYear) then
-                                        local take = math.min(count, req.count - foundCount)
-                                        for _ = 1, take do
-                                            table.insert(herbsToBrew, { herbType = hType, year = yearNum })
-                                        end
-                                        foundCount = foundCount + take
-                                        if foundCount >= req.count then
-                                            break
-                                        end
-                                    end
-                                end
-                            end
-                            if foundCount < req.count then
-                                canBrew = false
-                                break
-                            end
+                        if foundCount < req.count then
+                            canBrew = false
+                            break
                         end
-                        if canBrew and #herbsToBrew == 3 then
-                            Env.brewStartedAt = os.clock()
-                            Env.stokedThisRound = false
-                            Env.Remotes.CauldronStartBrew:FireServer(herbsToBrew)
-                        end
+                    end
+                    if canBrew and #herbsToBrew == 3 then
+                        Env.brewStartedAt = os.clock()
+                        Env.stokedThisRound = false
+                        Env.Remotes.CauldronStartBrew:FireServer(herbsToBrew)
+                        Hub.Fn.logDebug("⚗️ เริ่มปรุงยาสูตร: " .. currentRecipe.name)
                     end
                 end
                 task.wait(1.5)
@@ -2264,7 +2224,7 @@ do
     end
 end
 
--- 5. สร้าง GUI หลัก (แยก Scope เพื่อไม่ให้ชนลิมิต 200 Local)
+-- 5. สร้าง GUI หลัก
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -2311,7 +2271,7 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V29 (Perfect Stoke + Exam)"
+    TitleLabel.Text = "Murim Hub V32 (Clean Recipes)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 13
@@ -2336,7 +2296,7 @@ do
     UI.ScrollFrame.BorderSizePixel = 0
     UI.ScrollFrame.ScrollBarThickness = 5
     UI.ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 120)
-    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 2050)
+    UI.ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 2100)
     UI.ScrollFrame.Parent = MainFrame
 
     local scrollLayout = Instance.new("UIListLayout")
@@ -2425,7 +2385,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V29 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V32 สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2591,8 +2551,8 @@ do
     local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 29)
     local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 30)
 
-    -- หมวด Alchemy + Perfect Stoke + Auto Exam
-    createCategoryHeader("⚗️ ALCHEMY (12 สูตร + PERFECT STOKE + EXAM)", 31)
+    -- หมวด Alchemy + Perfect Stoke + Auto Exam + วาร์ปคนสอบ
+    createCategoryHeader("⚗️ ALCHEMY (11 สูตร + PERFECT STOKE + EXAM)", 31)
     UI.AlchemyStatusLabel = Instance.new("TextLabel")
     UI.AlchemyStatusLabel.Size = UDim2.new(1, 0, 0, 22)
     UI.AlchemyStatusLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
@@ -2621,11 +2581,12 @@ do
     UI.ExamStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.ExamStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleExamBtn = createButton("🎓 Auto Alchemy Exam (สอบเลื่อนขั้นอัตโนมัติ): OFF", Color3.fromRGB(100, 100, 100), 39)
+    local TpExaminerBtn = createButton("🚀 วาร์ปไปหาคนสอบ (Grandmaster Danxin)", Color3.fromRGB(50, 115, 175), 39)
+    local ToggleExamBtn = createButton("🎓 Auto Alchemy Exam (สอบเลื่อนขั้นอัตโนมัติ): OFF", Color3.fromRGB(100, 100, 100), 40)
 
-    createCategoryHeader("⚙️ SYSTEM & REWARDS", 40)
-    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 41)
-    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 42)
+    createCategoryHeader("⚙️ SYSTEM & REWARDS", 41)
+    local ClaimRewardBtn = createButton("🎁 Claim Daily & Cauldron", Color3.fromRGB(50, 150, 150), 42)
+    local DestroyBtn = createButton("🛑 Destroy Script & Stop", Color3.fromRGB(180, 40, 40), 43)
 
     Hub.Fn.connect(ToggleCultivateBtn.MouseButton1Click, function()
         State.isAutoCultivate = not State.isAutoCultivate
@@ -2715,13 +2676,31 @@ do
             Hub.Fn.logDebug("✨ ส่งคำสั่งกลั่นยา Tier 6 (CauldronStartRefine)")
         end
     end)
+    Hub.Fn.connect(TpExaminerBtn.MouseButton1Click, function()
+        local _, hrp = Hub.Fn.getCharacter()
+        if hrp then
+            local examiner = workspace:FindFirstChild("AlchemyExaminer")
+            local targetPos = Vector3.new(-116.0, 12.0, 148.0)
+            if examiner then
+                local pp = examiner:IsA("BasePart") and examiner or examiner:FindFirstChildWhichIsA("BasePart")
+                if pp then
+                    targetPos = pp.Position + Vector3.new(0, 2, 3)
+                end
+            end
+            Hub.Fn.safeTeleport(hrp, CFrame.new(targetPos))
+            Hub.Fn.logDebug("🚀 วาร์ปไปหา Grandmaster Danxin เรียบร้อย")
+        end
+    end)
     Hub.Fn.connect(ToggleExamBtn.MouseButton1Click, function()
         State.isAutoAlchemyExam = not State.isAutoAlchemyExam
         ToggleExamBtn.Text = State.isAutoAlchemyExam and "🎓 Auto Alchemy Exam (สอบเลื่อนขั้นอัตโนมัติ): ON" or "🎓 Auto Alchemy Exam (สอบเลื่อนขั้นอัตโนมัติ): OFF"
         ToggleExamBtn.BackgroundColor3 = State.isAutoAlchemyExam and Color3.fromRGB(55, 145, 95) or Color3.fromRGB(100, 100, 100)
         if UI.ExamStatusLabel then
-            UI.ExamStatusLabel.Text = State.isAutoAlchemyExam and "🎓 Exam: Standby (รอเริ่มสอบ)" or "🎓 Exam: OFF"
+            UI.ExamStatusLabel.Text = State.isAutoAlchemyExam and "🎓 Exam: Standby (กำลังเปิดหน้าต่างสอบ...)" or "🎓 Exam: OFF"
             UI.ExamStatusLabel.TextColor3 = State.isAutoAlchemyExam and Color3.fromRGB(130, 235, 160) or Color3.fromRGB(170, 170, 170)
+        end
+        if State.isAutoAlchemyExam and Env.Remotes.AlchemyExam then
+            Env.Remotes.AlchemyExam:FireServer("open")
         end
     end)
     Hub.Fn.connect(ClaimRewardBtn.MouseButton1Click, function()
@@ -2767,5 +2746,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V29! (Perfect Stoke + Auto Exam + 12 สูตรยา)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V32! (ลบเมนูปรุงยามั่วออกเรียบร้อย)")
 end
