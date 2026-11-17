@@ -1,5 +1,5 @@
 -- ==========================================
--- Murim Hub V36.1 (Optimized Spirit Catch + Anti-AFK)
+-- Murim Hub V36.2 (V36.1 Base + 130 Herbs + 15m Cooldown Wait)
 -- ==========================================
 
 local Players = game:GetService("Players")
@@ -567,6 +567,7 @@ do
         isFarming = false,
         isDynamicStream = true,
         herbModeIndex = 1,
+        sessionHerbCount = 0, -- เพิ่มตัวแปรนับจำนวนสมุนไพรสะสม
         isAutoBrew = false,
         isAutoPerfectStoke = true,
         isAutoAlchemyExam = false,
@@ -2029,7 +2030,6 @@ do
                                 if spirit:IsA("BasePart") and spirit.Parent and not caughtCache[spirit] and (spirit.Position - bodyPos).Magnitude <= maxTether then
                                     foundTarget = true
                                     
-                                    -- 🚀 ระบบติดตามและจำลองการแตะวิญญาณที่เคลื่อนที่แบบเรียลไทม์ (Smooth Chase)
                                     local chaseDeadline = os.clock() + 4
                                     while State.isAutoSoul and spirit.Parent and os.clock() < chaseDeadline do
                                         local curPos = spirit.Position
@@ -2055,7 +2055,6 @@ do
                             end
                         end
 
-                        -- สแกนหา WanderingSpirit เพิ่มเติมทั่วมุมแมพ
                         for _, obj in ipairs(workspace:GetDescendants()) do
                             if not State.isAutoSoul then break end
                             if obj.Name == "WanderingSpirit" and obj:IsA("BasePart") and obj.Parent and not caughtCache[obj] and (obj.Position - bodyPos).Magnitude <= maxTether then
@@ -2352,7 +2351,7 @@ do
             return true, nil
         end
 
-        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (Safe Anti-Cheat + Chase x2)...")
+        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (Safe Anti-Cheat + Chase x2 + พักรอ 15 นาทีเมื่อครบ 130 ชิ้น)...")
         while State.isFarming do
             if Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                 task.wait(0.5)
@@ -2421,7 +2420,23 @@ do
                                 if collected then
                                     table.insert(pickHistory, workspace:GetServerTimeNow())
                                     Env.collectedCooldowns[herbPart] = os.clock() + 30
-                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. #pickHistory .. "/150)")
+                                    
+                                    -- ระบบนับสะสม 130 ชิ้นแล้วพักรอ 15 นาที (Absolute Deadline)
+                                    State.sessionHerbCount = (State.sessionHerbCount or 0) + 1
+                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. State.sessionHerbCount .. "/130)")
+
+                                    if State.sessionHerbCount >= 130 then
+                                        Hub.Fn.logDebug("🎯 ครบ 130 ชิ้น! พักการเก็บสมุนไพรเป็นเวลา 15 นาที เพื่อความปลอดภัย...")
+                                        State.sessionHerbCount = 0
+
+                                        local coolDownEnd = os.clock() + 910
+                                        while State.isFarming and os.clock() < coolDownEnd do
+                                            Hub.Env.currentHerbTargetName = "Cooldown (พักรอ 15 นาที)..."
+                                            Env.groundPlatform.CFrame = CFrame.new(0, 9999, 0)
+                                            task.wait(5)
+                                        end
+                                        Hub.Fn.logDebug("✨ ครบกำหนดเวลาพัก 15 นาที กลับมาเริ่มลุยเก็บสมุนไพรต่อ...")
+                                    end
                                 else
                                     Env.collectedCooldowns[herbPart] = os.clock() + 3
                                 end
@@ -2626,10 +2641,10 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V36.1 (Anti-AFK + Spirit Chase)"
+    TitleLabel.Text = "Murim Hub V36.2 (130 Herbs + 15m Cooldown)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
-    TitleLabel.TextSize = 12
+    TitleLabel.TextSize = 11
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
     TitleLabel.Parent = TitleBar
 
@@ -2734,13 +2749,12 @@ do
         return btn
     end
 
-    -- หมวด Debug, Rules Checker & Error Log
     createCategoryHeader("🛠️ DEBUG & GAME RULES CHECKER", 0)
     UI.DebugBox = Instance.new("TextBox")
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.1 สำเร็จ (Anti-AFK Active)!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.2 สำเร็จ (Anti-AFK Active)!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2776,7 +2790,6 @@ do
         showDebugErrorGui("⚠️ Murim Hub Log & Last Error", "Last Error:\n" .. tostring(Env.lastErrorText) .. "\n\nRecent Logs:\n" .. UI.DebugBox.Text)
     end)
 
-    -- หมวด Combat, World Boss & Sect Clash Event
     createCategoryHeader("⚔️ COMBAT, WORLD BOSS & EVENTS", 4)
     local RefreshMobListBtn = createButton("🔄 สแกนรายชื่อมอนสเตอร์ในแมพ", Color3.fromRGB(40, 90, 140), 5)
 
@@ -2878,7 +2891,6 @@ do
         Hub.Fn.setWorker("startMapEventLoop", State.isAutoMapEvent, Hub.Fn.startMapEventLoop)
     end)
 
-    -- หมวด Cultivation, Soul Stars & Gathering
     createCategoryHeader("✨ CULTIVATION & SOUL STARS (1-10)", 17)
     local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 18)
     local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 19)
@@ -2901,12 +2913,11 @@ do
     local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 25)
     local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 26)
 
-    createCategoryHeader("🌿 GATHERING (SAFE ANTI-CHEAT + CHASE x2)", 27)
+    createCategoryHeader("🌿 GATHERING (130 HERBS + 15M COOLDOWN + CHASE x2)", 27)
     local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Safe Speed + Chase x2)", Color3.fromRGB(40, 160, 80), 28)
     local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 29)
     local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 30)
 
-    -- หมวด Alchemy + Perfect Stoke + Auto Exam + วาร์ปคนสอบ
     createCategoryHeader("⚗️ ALCHEMY (11 สูตร + PERFECT STOKE + EXAM)", 31)
     UI.AlchemyStatusLabel = Instance.new("TextLabel")
     UI.AlchemyStatusLabel.Size = UDim2.new(1, 0, 0, 22)
@@ -3101,5 +3112,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V36.1! (Anti-AFK + Spirit Smooth Chase)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V36.2! (Anti-AFK + Spirit Smooth Chase + 130 Herbs Cooldown)")
 end
