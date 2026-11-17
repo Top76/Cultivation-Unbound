@@ -1,5 +1,5 @@
 -- ==========================================
--- Murim Hub V36.3 (All-in-One: 130 Herbs + 15m Cooldown + Safe Spirit TP + 10/10 Soul Check)
+-- Murim Hub V36.1 (Optimized Spirit Catch + Anti-AFK)
 -- ==========================================
 
 local Players = game:GetService("Players")
@@ -567,7 +567,6 @@ do
         isFarming = false,
         isDynamicStream = true,
         herbModeIndex = 1,
-        sessionHerbCount = 0, -- ตัวแปรนับจำนวนสมุนไพรสะสม 130 ชิ้น
         isAutoBrew = false,
         isAutoPerfectStoke = true,
         isAutoAlchemyExam = false,
@@ -1879,7 +1878,7 @@ do
     end
 end
 
--- 4. ระบบ Cultivation, Soul Cultivation (ปรับปรุง 10/10 Stars + Safe Spirit TP), Herbs และ Alchemy
+-- 4. ระบบ Cultivation, Soul Cultivation (ปรับปรุงระบบจับวิญญาณเคลื่อนที่ 100%), Herbs และ Alchemy
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -1967,7 +1966,7 @@ do
         end
     end
 
-    -- ==================== ระบบ Soul Cultivation + 10/10 Stars Check + Safe TP Spirit Herbs ====================
+    -- ==================== อัปเดตระบบจับวิญญาณเคลื่อนที่ (Smooth Chase & Touch Simulation) ====================
     function Hub.Fn.startSoulLoop()
         local caughtCache = {}
         local sessionStartTime = 0
@@ -1980,29 +1979,6 @@ do
             if UI.SoulStatusLabel then
                 UI.SoulStatusLabel.Text = string.format("👻 Soul: ⭐%d/10 | Essence: %d/%d", stars, essence, need)
                 UI.SoulStatusLabel.TextColor3 = Color3.fromRGB(130, 235, 255)
-            end
-
-            -- 👉 เช็กว่าดาวตัน 10/10 แล้วหรือไม่ ถ้ารู้ว่าตัน ให้รักษาร่างวิญญาณและนั่งสมาธิบ่มเพาะพลังงานอย่างเดียว
-            if stars >= 10 then
-                if UI.SoulStatusLabel then
-                    UI.SoulStatusLabel.Text = "👻 Soul: ⭐10/10 (ดาวตันสูงสุดแล้ว - นั่งสมาธิบ่มเพาะ)"
-                    UI.SoulStatusLabel.TextColor3 = Color3.fromRGB(255, 215, 100)
-                end
-                
-                local isProjecting = LocalPlayer:GetAttribute("SoulProjecting") == true
-                if not isProjecting and LocalPlayer:GetAttribute("SoulProjectionLearned") == true then
-                    if Env.Remotes.SoulProjection then
-                        Env.Remotes.SoulProjection:FireServer("start")
-                        task.wait(2.1)
-                    end
-                elseif isProjecting and Env.Remotes.SoulCultivation then
-                    pcall(function()
-                        Env.Remotes.SoulCultivation:FireServer("start")
-                        Env.Remotes.SoulCultivation:FireServer("meditate")
-                    end)
-                end
-                task.wait(1)
-                continue
             end
 
             if char and hrp and humanoid and humanoid.Health > 0 then
@@ -2053,6 +2029,7 @@ do
                                 if spirit:IsA("BasePart") and spirit.Parent and not caughtCache[spirit] and (spirit.Position - bodyPos).Magnitude <= maxTether then
                                     foundTarget = true
                                     
+                                    -- 🚀 ระบบติดตามและจำลองการแตะวิญญาณที่เคลื่อนที่แบบเรียลไทม์ (Smooth Chase)
                                     local chaseDeadline = os.clock() + 4
                                     while State.isAutoSoul and spirit.Parent and os.clock() < chaseDeadline do
                                         local curPos = spirit.Position
@@ -2078,6 +2055,7 @@ do
                             end
                         end
 
+                        -- สแกนหา WanderingSpirit เพิ่มเติมทั่วมุมแมพ
                         for _, obj in ipairs(workspace:GetDescendants()) do
                             if not State.isAutoSoul then break end
                             if obj.Name == "WanderingSpirit" and obj:IsA("BasePart") and obj.Parent and not caughtCache[obj] and (obj.Position - bodyPos).Magnitude <= maxTether then
@@ -2115,11 +2093,8 @@ do
                                     local prompt = herb:FindFirstChildOfClass("ProximityPrompt")
                                     if prompt and (herb.Position - bodyPos).Magnitude <= maxTether then
                                         foundTarget = true
-                                        
-                                        -- 🛡️ ใช้ safeTeleport สำหรับสมุนไพรวิญญาณ ป้องกันการโดน Anti-Cheat เตะ
-                                        local targetCF = herb.CFrame * CFrame.new(0, 1.5, 0)
-                                        Hub.Fn.safeTeleport(hrp, targetCF, herb)
-
+                                        hrp.CFrame = herb.CFrame * CFrame.new(0, 1.5, 0)
+                                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                                         if firetouchinterest then
                                             pcall(function()
                                                 firetouchinterest(hrp, herb, 0)
@@ -2353,7 +2328,6 @@ do
         return best.part, best.prompt, best.dist, best.year
     end
 
-    -- ==================== ระบบฟาร์มสมุนไพร (130 ชิ้น + พักรอ 15 นาที + Safe Speed + Chase x2) ====================
     function Hub.Fn.startFarmLoop()
         initHerbCache()
         local pickHistory = {}
@@ -2378,7 +2352,7 @@ do
             return true, nil
         end
 
-        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (130 Herbs + 15m Cooldown + Chase x2)...")
+        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (Safe Anti-Cheat + Chase x2)...")
         while State.isFarming do
             if Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                 task.wait(0.5)
@@ -2447,22 +2421,7 @@ do
                                 if collected then
                                     table.insert(pickHistory, workspace:GetServerTimeNow())
                                     Env.collectedCooldowns[herbPart] = os.clock() + 30
-                                    
-                                    -- ระบบนับสะสม 130 ชิ้น แล้วพักรอ 15 นาที (Absolute Deadline)
-                                    State.sessionHerbCount = (State.sessionHerbCount or 0) + 1
-                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. State.sessionHerbCount .. "/130)")
-
-                                    if State.sessionHerbCount >= 130 then
-                                        Hub.Fn.logDebug("🎯 ครบ 130 ชิ้น! พักการเก็บสมุนไพรเป็นเวลา 15 นาที เพื่อความปลอดภัย...")
-                                        State.sessionHerbCount = 0
-
-                                        local coolDownEnd = os.clock() + 910
-                                        while State.isFarming and os.clock() < coolDownEnd do
-                                            Env.groundPlatform.CFrame = CFrame.new(0, 9999, 0)
-                                            task.wait(5)
-                                        end
-                                        Hub.Fn.logDebug("✨ ครบกำหนดเวลาพัก 15 นาที กลับมาเริ่มลุยเก็บสมุนไพรต่อ...")
-                                    end
+                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. #pickHistory .. "/150)")
                                 else
                                     Env.collectedCooldowns[herbPart] = os.clock() + 3
                                 end
@@ -2620,7 +2579,7 @@ do
     end
 end
 
--- 5. สร้าง GUI หลักและปุ่มเปิดปิด (OpenToggleBtn)
+-- 5. สร้าง GUI หลัก
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -2637,11 +2596,10 @@ do
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = PlayerGui
 
-    -- 👉 ปุ่มเปิด/ปิด หน้าต่าง Hub (วางไว้มุมซ้ายบนชัดเจน ไม่ให้หลุดจอ)
     local OpenToggleBtn = Instance.new("TextButton")
-    OpenToggleBtn.Size = UDim2.new(0, 105, 0, 38)
-    OpenToggleBtn.Position = UDim2.new(0.02, 0, 0.15, 0)
-    OpenToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    OpenToggleBtn.Size = UDim2.new(0, 95, 0, 35)
+    OpenToggleBtn.Position = UDim2.new(0.02, 0, 0.2, 0)
+    OpenToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
     OpenToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     OpenToggleBtn.Text = "⚡ Hub [Hide]"
     OpenToggleBtn.Font = Enum.Font.SourceSansBold
@@ -2668,10 +2626,10 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V36.3 (All-in-One)"
+    TitleLabel.Text = "Murim Hub V36.1 (Anti-AFK + Spirit Chase)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
-    TitleLabel.TextSize = 11
+    TitleLabel.TextSize = 12
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
     TitleLabel.Parent = TitleBar
 
@@ -2776,12 +2734,13 @@ do
         return btn
     end
 
+    -- หมวด Debug, Rules Checker & Error Log
     createCategoryHeader("🛠️ DEBUG & GAME RULES CHECKER", 0)
     UI.DebugBox = Instance.new("TextBox")
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.3 สำเร็จ (Anti-AFK Active)!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.1 สำเร็จ (Anti-AFK Active)!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2817,6 +2776,7 @@ do
         showDebugErrorGui("⚠️ Murim Hub Log & Last Error", "Last Error:\n" .. tostring(Env.lastErrorText) .. "\n\nRecent Logs:\n" .. UI.DebugBox.Text)
     end)
 
+    -- หมวด Combat, World Boss & Sect Clash Event
     createCategoryHeader("⚔️ COMBAT, WORLD BOSS & EVENTS", 4)
     local RefreshMobListBtn = createButton("🔄 สแกนรายชื่อมอนสเตอร์ในแมพ", Color3.fromRGB(40, 90, 140), 5)
 
@@ -2918,6 +2878,7 @@ do
         Hub.Fn.setWorker("startMapEventLoop", State.isAutoMapEvent, Hub.Fn.startMapEventLoop)
     end)
 
+    -- หมวด Cultivation, Soul Stars & Gathering
     createCategoryHeader("✨ CULTIVATION & SOUL STARS (1-10)", 17)
     local ToggleCultivateBtn = createButton("🧘 Start Auto Meditate (นั่งสมาธิ/บ่มเพาะ)", Color3.fromRGB(50, 140, 180), 18)
     local ToggleBreakthroughBtn = createButton("🌀 Auto Breakthrough (ทะลวงขั้น): OFF", Color3.fromRGB(100, 100, 100), 19)
@@ -2936,15 +2897,16 @@ do
     UI.SoulStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.SoulStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleSoulBtn = createButton("👻 Auto Soul Cultivate & Catch (ปั๊มดาว + ไล่จับวิญญาณ + 10/10 Check): OFF", Color3.fromRGB(100, 100, 100), 24)
+    local ToggleSoulBtn = createButton("👻 Auto Soul Cultivate & Catch (ปั๊มดาววิญญาณ + ไล่จับวิญญาณเคลื่อนที่): OFF", Color3.fromRGB(100, 100, 100), 24)
     local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 25)
     local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 26)
 
-    createCategoryHeader("🌿 GATHERING (130 HERBS + 15M COOLDOWN + SAFE SPIRIT TP)", 27)
+    createCategoryHeader("🌿 GATHERING (SAFE ANTI-CHEAT + CHASE x2)", 27)
     local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Safe Speed + Chase x2)", Color3.fromRGB(40, 160, 80), 28)
     local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 29)
     local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 30)
 
+    -- หมวด Alchemy + Perfect Stoke + Auto Exam + วาร์ปคนสอบ
     createCategoryHeader("⚗️ ALCHEMY (11 สูตร + PERFECT STOKE + EXAM)", 31)
     UI.AlchemyStatusLabel = Instance.new("TextLabel")
     UI.AlchemyStatusLabel.Size = UDim2.new(1, 0, 0, 22)
@@ -3139,5 +3101,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V36.3! (All-in-One: 130 Herbs + 15m Cooldown + Safe Spirit TP + 10/10 Check)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V36.1! (Anti-AFK + Spirit Smooth Chase)")
 end
