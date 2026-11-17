@@ -1,3 +1,7 @@
+-- ==========================================
+-- Murim Hub V36.1 (Optimized Spirit Catch + Anti-AFK)
+-- ==========================================
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
@@ -135,7 +139,7 @@ local function showDebugErrorGui(titleText, errMsg, extraActionText, extraAction
     end)
 end
 
--- ==================== โครงสร้างหลักแบบแยก Scope (ป้องกันเกิน 200 Local Variables) ====================
+-- ==================== โครงสร้างหลักแบบแยก Scope ====================
 local Hub = {
     Env = {
         connections = {},
@@ -411,11 +415,24 @@ do
         end
     end
 
-    Hub.Fn.connect(LocalPlayer.Idled, function()
+    -- ==================== ระบบ Anti-AFK แบบสมบูรณ์ (Event + Background Worker) ====================
+    local function triggerAntiAfk()
         pcall(function()
             VirtualUser:CaptureController()
             VirtualUser:ClickButton2(Vector2.new(0, 0))
         end)
+    end
+
+    Hub.Fn.connect(LocalPlayer.Idled, triggerAntiAfk)
+
+    task.spawn(function()
+        while task.wait(50) do
+            if not Env.destroyed then
+                triggerAntiAfk()
+            else
+                break
+            end
+        end
     end)
 
     Hub.Config = {
@@ -849,7 +866,7 @@ do
             end
         end
 
-        if text == "Which of these is a spirit herb?" and type(herbs) == "table" then
+        if text:find("Which of these is a spirit herb?") and type(herbs) == "table" then
             for _, h in pairs(herbs) do
                 if type(h) == "table" and h.spirit == true and h.name then
                     local idx = findOption(h.name)
@@ -1861,7 +1878,7 @@ do
     end
 end
 
--- 4. ระบบ Cultivation, Soul Cultivation, Herbs (Safe Anti-Cheat + Chase x2) และ Alchemy
+-- 4. ระบบ Cultivation, Soul Cultivation (ปรับปรุงระบบจับวิญญาณเคลื่อนที่ 100%), Herbs และ Alchemy
 do
     local Env = Hub.Env
     local State = Hub.State
@@ -1949,6 +1966,7 @@ do
         end
     end
 
+    -- ==================== อัปเดตระบบจับวิญญาณเคลื่อนที่ (Smooth Chase & Touch Simulation) ====================
     function Hub.Fn.startSoulLoop()
         local caughtCache = {}
         local sessionStartTime = 0
@@ -2010,21 +2028,88 @@ do
                                 end
                                 if spirit:IsA("BasePart") and spirit.Parent and not caughtCache[spirit] and (spirit.Position - bodyPos).Magnitude <= maxTether then
                                     foundTarget = true
-                                    hrp.CFrame = spirit.CFrame
-                                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                                    if firetouchinterest then
-                                        pcall(function()
-                                            firetouchinterest(hrp, spirit, 0)
-                                            firetouchinterest(hrp, spirit, 1)
-                                        end)
-                                    end
-                                    task.wait(0.08)
-                                    if spirit.Parent then
-                                        hrp.CFrame = spirit.CFrame
+                                    
+                                    -- 🚀 ระบบติดตามและจำลองการแตะวิญญาณที่เคลื่อนที่แบบเรียลไทม์ (Smooth Chase)
+                                    local chaseDeadline = os.clock() + 4
+                                    while State.isAutoSoul and spirit.Parent and os.clock() < chaseDeadline do
+                                        local curPos = spirit.Position
+                                        hrp.CFrame = CFrame.new(curPos + Vector3.new(0, 2, 0))
+                                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                        
+                                        if firetouchinterest then
+                                            pcall(function()
+                                                firetouchinterest(hrp, spirit, 0)
+                                                firetouchinterest(hrp, spirit, 1)
+                                            end)
+                                        end
+                                        
                                         Env.Remotes.SpiritWorld:FireServer("catch", spirit)
+                                        
+                                        if not spirit.Parent then break end
+                                        task.wait(0.04)
                                     end
+
                                     caughtCache[spirit] = true
                                     task.wait(0.1)
+                                end
+                            end
+                        end
+
+                        -- สแกนหา WanderingSpirit เพิ่มเติมทั่วมุมแมพ
+                        for _, obj in ipairs(workspace:GetDescendants()) do
+                            if not State.isAutoSoul then break end
+                            if obj.Name == "WanderingSpirit" and obj:IsA("BasePart") and obj.Parent and not caughtCache[obj] and (obj.Position - bodyPos).Magnitude <= maxTether then
+                                foundTarget = true
+                                local chaseDeadline = os.clock() + 4
+                                while State.isAutoSoul and obj.Parent and os.clock() < chaseDeadline do
+                                    local curPos = obj.Position
+                                    hrp.CFrame = CFrame.new(curPos + Vector3.new(0, 2, 0))
+                                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                    
+                                    if firetouchinterest then
+                                        pcall(function()
+                                            firetouchinterest(hrp, obj, 0)
+                                            firetouchinterest(hrp, obj, 1)
+                                        end)
+                                    end
+                                    
+                                    Env.Remotes.SpiritWorld:FireServer("catch", obj)
+                                    
+                                    if not obj.Parent then break end
+                                    task.wait(0.04)
+                                end
+                                caughtCache[obj] = true
+                                task.wait(0.1)
+                            end
+                        end
+
+                        local herbsFolder = spiritWorldFolder:FindFirstChild("Herbs")
+                        if herbsFolder then
+                            for _, herb in ipairs(herbsFolder:GetChildren()) do
+                                if not State.isAutoSoul or LocalPlayer:GetAttribute("SoulProjecting") ~= true then
+                                    break
+                                end
+                                if herb:IsA("BasePart") and herb:GetAttribute("Picked") ~= true then
+                                    local prompt = herb:FindFirstChildOfClass("ProximityPrompt")
+                                    if prompt and (herb.Position - bodyPos).Magnitude <= maxTether then
+                                        foundTarget = true
+                                        hrp.CFrame = herb.CFrame * CFrame.new(0, 1.5, 0)
+                                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                        if firetouchinterest then
+                                            pcall(function()
+                                                firetouchinterest(hrp, herb, 0)
+                                                firetouchinterest(hrp, herb, 1)
+                                            end)
+                                        end
+                                        task.wait(0.08)
+                                        if fireproximityprompt then
+                                            pcall(fireproximityprompt, prompt)
+                                        end
+                                        if Env.Remotes.CollectHerb then
+                                            Env.Remotes.CollectHerb:FireServer(herb)
+                                        end
+                                        task.wait(0.1)
+                                    end
                                 end
                             end
                         end
@@ -2541,10 +2626,10 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V36 (Safe Anti-Cheat + Herbs)"
+    TitleLabel.Text = "Murim Hub V36.1 (Anti-AFK + Spirit Chase)"
     TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
     TitleLabel.Font = Enum.Font.SourceSansBold
-    TitleLabel.TextSize = 13
+    TitleLabel.TextSize = 12
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
     TitleLabel.Parent = TitleBar
 
@@ -2655,7 +2740,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36 สำเร็จ!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.1 สำเร็จ (Anti-AFK Active)!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2812,7 +2897,7 @@ do
     UI.SoulStatusLabel.Parent = UI.ScrollFrame
     Instance.new("UICorner", UI.SoulStatusLabel).CornerRadius = UDim.new(0, 5)
 
-    local ToggleSoulBtn = createButton("👻 Auto Soul Cultivate & Catch (ปั๊มดาววิญญาณ): OFF", Color3.fromRGB(100, 100, 100), 24)
+    local ToggleSoulBtn = createButton("👻 Auto Soul Cultivate & Catch (ปั๊มดาววิญญาณ + ไล่จับวิญญาณเคลื่อนที่): OFF", Color3.fromRGB(100, 100, 100), 24)
     local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 25)
     local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 26)
 
@@ -2889,7 +2974,7 @@ do
     end)
     Hub.Fn.connect(ToggleSoulBtn.MouseButton1Click, function()
         State.isAutoSoul = not State.isAutoSoul
-        ToggleSoulBtn.Text = State.isAutoSoul and "👻 Auto Soul Cultivate & Catch (ปั๊มดาววิญญาณ): ON" or "👻 Auto Soul Cultivate & Catch (ปั๊มดาววิญญาณ): OFF"
+        ToggleSoulBtn.Text = State.isAutoSoul and "👻 Auto Soul Cultivate & Catch (ปั๊มดาว + ไล่จับวิญญาณ): ON" or "👻 Auto Soul Cultivate & Catch (ปั๊มดาว + ไล่จับวิญญาณ): OFF"
         ToggleSoulBtn.BackgroundColor3 = State.isAutoSoul and Color3.fromRGB(46, 139, 87) or Color3.fromRGB(100, 100, 100)
         Hub.Fn.setWorker("startSoulLoop", State.isAutoSoul, Hub.Fn.startSoulLoop)
     end)
@@ -3016,5 +3101,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V36! (Safe Anti-Cheat + Herbs + Chase x2 + Exam)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V36.1! (Anti-AFK + Spirit Smooth Chase)")
 end
