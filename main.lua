@@ -2028,37 +2028,6 @@ do
                                 end
                             end
                         end
-
-                        local herbsFolder = spiritWorldFolder:FindFirstChild("Herbs")
-                        if herbsFolder then
-                            for _, herb in ipairs(herbsFolder:GetChildren()) do
-                                if not State.isAutoSoul or LocalPlayer:GetAttribute("SoulProjecting") ~= true then
-                                    break
-                                end
-                                if herb:IsA("BasePart") and herb:GetAttribute("Picked") ~= true then
-                                    local prompt = herb:FindFirstChildOfClass("ProximityPrompt")
-                                    if prompt and (herb.Position - bodyPos).Magnitude <= maxTether then
-                                        foundTarget = true
-                                        hrp.CFrame = herb.CFrame * CFrame.new(0, 1.5, 0)
-                                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                                        if firetouchinterest then
-                                            pcall(function()
-                                                firetouchinterest(hrp, herb, 0)
-                                                firetouchinterest(hrp, herb, 1)
-                                            end)
-                                        end
-                                        task.wait(0.08)
-                                        if fireproximityprompt then
-                                            pcall(fireproximityprompt, prompt)
-                                        end
-                                        if Env.Remotes.CollectHerb then
-                                            Env.Remotes.CollectHerb:FireServer(herb)
-                                        end
-                                        task.wait(0.1)
-                                    end
-                                end
-                            end
-                        end
                     end
 
                     if Env.Remotes.SoulCultivation then
