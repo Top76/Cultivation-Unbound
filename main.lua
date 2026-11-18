@@ -1,5 +1,5 @@
 -- ==========================================
--- Murim Hub V36.1 (Auto Soul: Spirit Catch Only + Anti-AFK)
+-- Murim Hub V36.1 [FULL FEATURES + SAFE SPEED 75 & LAG PROTECTED]
 -- ==========================================
 
 local Players = game:GetService("Players")
@@ -624,6 +624,7 @@ do
         return nil
     end
 
+    -- ==================== Safe Teleport (ลดความเร็วเหลือ 75 + ป้องกันอาการแลค / Lag Spike Protection) ====================
     function Hub.Fn.safeTeleport(hrp, targetCFrame, targetHrp)
         if not hrp or not targetCFrame then
             return false
@@ -670,19 +671,27 @@ do
             return true
         end
 
-        local safeSpeed = 115
+        -- ปรับ Safe Speed เป็น 75 เพื่อความปลอดภัยสูงสุด ป้องกันดีดเวลาแลค
+        local safeSpeed = 75
         local duration = totalDist / safeSpeed
         local steps = math.max(1, math.ceil(duration / 0.05))
         local waitPerStep = duration / steps
         local rotOnly = targetCFrame - targetCFrame.Position
 
+        local startTime = os.clock()
         for i = 1, steps do
-            if not hrp or not hrp.Parent then
+            if not hrp or not hrp.Parent or (os.clock() - startTime) > 6 then
                 return false
             end
             local nextPos = startPos:Lerp(targetPos, i / steps)
             applyCFrame(CFrame.new(nextPos) * rotOnly)
+            
+            -- ระบบเช็คอาการแลค (Lag Spike Protection)
+            local t0 = os.clock()
             task.wait(waitPerStep)
+            if (os.clock() - t0) > 0.25 then
+                task.wait(0.5) -- หากช่วงนี้แลค ให้พักรอดูอาการก่อน
+            end
         end
         return true
     end
@@ -2034,7 +2043,6 @@ do
                     local foundTarget = false
 
                     if spiritWorldFolder and Env.Remotes.SpiritWorld then
-                        -- ไล่จับวิญญาณในโฟลเดอร์ Spirits
                         local spiritsFolder = spiritWorldFolder:FindFirstChild("Spirits")
                         if spiritsFolder then
                             for _, spirit in ipairs(spiritsFolder:GetChildren()) do
@@ -2067,7 +2075,6 @@ do
                             end
                         end
 
-                        -- สแกนหา WanderingSpirit เพิ่มเติม
                         for _, obj in ipairs(workspace:GetDescendants()) do
                             if not State.isAutoSoul then break end
                             if obj.Name == "WanderingSpirit" and obj:IsA("BasePart") and obj.Parent and not caughtCache[obj] and (obj.Position - bodyPos).Magnitude <= maxTether then
@@ -2314,8 +2321,8 @@ do
 
         local function canSafelyPick()
             local now = workspace:GetServerTimeNow()
-            if (now - lastJumpAt) < 20.5 then
-                return false, "ติดคูลดาวน์กันวาร์ป (รอ 20 วิ)"
+            if (now - lastJumpAt) < 15 then
+                return true, nil
             end
             local count = 0
             for i = #pickHistory, 1, -1 do
@@ -2325,13 +2332,13 @@ do
                     count = count + 1
                 end
             end
-            if count >= 148 then
-                return false, "ใกล้ครบโควตา 150 ต้น/10 นาที (พักรอสักครู่)"
+            if count >= 130 then -- ลิมิตโควตาปลอดภัยสำหรับเซิร์ฟเวอร์
+                return false, "ใกล้ครบโควตา 130 ต้น/10 นาที (พักเบรกสั้นๆ)"
             end
             return true, nil
         end
 
-        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (Safe Anti-Cheat + Chase x2)...")
+        Hub.Fn.logDebug("เริ่มลูปเก็บสมุนไพร (Safe Speed 75 + Chase x2)...")
         while State.isFarming do
             if Hub.Fn.isWorldBossActive() or (State.isAutoMapEvent and Env.ActiveMapEvent) then
                 task.wait(0.5)
@@ -2340,18 +2347,16 @@ do
                 if char and hrp and humanoid and humanoid.Health > 0 then
                     local okPick, reason = canSafelyPick()
                     if not okPick then
-                        Hub.Fn.logDebug("⏳ " .. tostring(reason))
                         task.wait(2)
                     else
                         local herbPart, prompt, _, herbYear = getBestHerbTarget(hrp.Position)
 
                         if herbPart and herbPart.Parent then
-                            Hub.Fn.logDebug("พบเป้าหมาย: " .. herbPart.Name .. " (" .. tostring(herbYear) .. "Yr)")
                             local initialPos = herbPart.Position
                             local standCFrame = herbPart.CFrame * CFrame.new(0, 1.5, 1.8)
 
                             Hub.Fn.safeTeleport(hrp, standCFrame, herbPart)
-                            task.wait(0.2)
+                            task.wait(0.15)
 
                             if not prompt then
                                 prompt = herbPart:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -2375,8 +2380,7 @@ do
                                 end
 
                                 if herbPart.Parent and (herbPart.Position - initialPos).Magnitude > 1.5 and (not prompt or prompt.Enabled) then
-                                    Hub.Fn.logDebug("🏃 สมุนไพรวิ่งหนี! กำลังไล่จับโบนัส x2...")
-                                    local chaseDeadline = os.clock() + 10
+                                    local chaseDeadline = os.clock() + 8
                                     while State.isFarming and herbPart.Parent and (not prompt or prompt.Enabled) and os.clock() < chaseDeadline do
                                         local chaseCF = herbPart.CFrame * CFrame.new(0, 1.5, 1.5)
                                         Hub.Fn.safeTeleport(hrp, chaseCF, herbPart)
@@ -2392,17 +2396,17 @@ do
                                         if Env.lastHerbCollectedAt > beforeCollect then
                                             break
                                         end
-                                        task.wait(0.08)
+                                        task.wait(0.06)
                                     end
                                 end
 
                                 local collected = (not herbPart.Parent) or (prompt and not prompt.Enabled) or (Env.lastHerbCollectedAt > beforeCollect)
                                 if collected then
                                     table.insert(pickHistory, workspace:GetServerTimeNow())
-                                    Env.collectedCooldowns[herbPart] = os.clock() + 30
-                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. #pickHistory .. "/150)")
+                                    Env.collectedCooldowns[herbPart] = os.clock() + 20
+                                    Hub.Fn.logDebug("✅ เก็บสำเร็จ: " .. herbPart.Name .. " (" .. #pickHistory .. "/130)")
                                 else
-                                    Env.collectedCooldowns[herbPart] = os.clock() + 3
+                                    Env.collectedCooldowns[herbPart] = os.clock() + 2
                                 end
                             end
                         else
@@ -2427,7 +2431,7 @@ do
 
                                 local startPos = hrp.Position
                                 local totalDist = (nextPos - startPos).Magnitude
-                                local safeSpeed = 115
+                                local safeSpeed = 75
                                 local steps = math.max(1, math.ceil((totalDist / safeSpeed) / 0.05))
 
                                 for i = 1, steps do
@@ -2576,13 +2580,13 @@ do
     ScreenGui.Parent = PlayerGui
 
     local OpenToggleBtn = Instance.new("TextButton")
-    OpenToggleBtn.Size = UDim2.new(0, 95, 0, 35)
+    OpenToggleBtn.Size = UDim2.new(0, 105, 0, 35)
     OpenToggleBtn.Position = UDim2.new(0.02, 0, 0.2, 0)
-    OpenToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    OpenToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    OpenToggleBtn.Text = "⚡ Hub [Hide]"
+    OpenToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 40, 30)
+    OpenToggleBtn.TextColor3 = Color3.fromRGB(130, 255, 150)
+    OpenToggleBtn.Text = "🛡️ SafeHub [Hide]"
     OpenToggleBtn.Font = Enum.Font.SourceSansBold
-    OpenToggleBtn.TextSize = 14
+    OpenToggleBtn.TextSize = 13
     OpenToggleBtn.Parent = ScreenGui
     Instance.new("UICorner", OpenToggleBtn).CornerRadius = UDim.new(0, 8)
 
@@ -2597,7 +2601,7 @@ do
 
     local TitleBar = Instance.new("Frame")
     TitleBar.Size = UDim2.new(1, 0, 0, 35)
-    TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(35, 45, 35)
     TitleBar.BorderSizePixel = 0
     TitleBar.Parent = MainFrame
 
@@ -2605,8 +2609,8 @@ do
     TitleLabel.Size = UDim2.new(1, -40, 1, 0)
     TitleLabel.Position = UDim2.new(0, 10, 0, 0)
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Text = "Murim Hub V36.1 (Anti-AFK + Spirit Chase)"
-    TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
+    TitleLabel.Text = "Murim Hub V36.1 [FULL + SAFE SPEED]"
+    TitleLabel.TextColor3 = Color3.fromRGB(150, 255, 170)
     TitleLabel.Font = Enum.Font.SourceSansBold
     TitleLabel.TextSize = 12
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -2677,12 +2681,12 @@ do
     Hub.Fn.connect(OpenToggleBtn.MouseButton1Click, function()
         isGuiVisible = not isGuiVisible
         MainFrame.Visible = isGuiVisible
-        OpenToggleBtn.Text = isGuiVisible and "⚡ Hub [Hide]" or "⚡ Hub [Open]"
+        OpenToggleBtn.Text = isGuiVisible and "🛡️ SafeHub [Hide]" or "🛡️ SafeHub [Open]"
     end)
     Hub.Fn.connect(CloseBtn.MouseButton1Click, function()
         isGuiVisible = false
         MainFrame.Visible = false
-        OpenToggleBtn.Text = "⚡ Hub [Open]"
+        OpenToggleBtn.Text = "🛡️ SafeHub [Open]"
     end)
 
     local function createCategoryHeader(text, layoutOrder)
@@ -2719,7 +2723,7 @@ do
     UI.DebugBox.Size = UDim2.new(1, 0, 0, 60)
     UI.DebugBox.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     UI.DebugBox.TextColor3 = Color3.fromRGB(120, 255, 140)
-    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.1 สำเร็จ (Anti-AFK Active)!"
+    UI.DebugBox.Text = "[Ready] โหลดสคริปต์ V36.1 [Safe Mode Full] สำเร็จ!"
     UI.DebugBox.TextWrapped = true
     UI.DebugBox.MultiLine = true
     UI.DebugBox.ClearTextOnFocus = false
@@ -2880,7 +2884,7 @@ do
     local ToggleOrbBtn = createButton("🔮 Start Auto Cultivation Orb", Color3.fromRGB(120, 80, 180), 25)
     local ZoneExpanseBtn = createButton("🌌 Zone: Celestial Expanse", Color3.fromRGB(80, 60, 160), 26)
 
-    createCategoryHeader("🌿 GATHERING (SAFE ANTI-CHEAT + CHASE x2)", 27)
+    createCategoryHeader("🌿 GATHERING (SAFE SPEED 75 + CHASE x2)", 27)
     local ToggleFarmBtn = createButton("🌿 Start Auto Herbs (Safe Speed + Chase x2)", Color3.fromRGB(40, 160, 80), 28)
     local ToggleHerbModeBtn = createButton("🌟 Mode: " .. Config.herbModes[State.herbModeIndex], Color3.fromRGB(180, 130, 30), 29)
     local ToggleStreamBtn = createButton("🗺️ Dynamic Map Streamer: ON", Color3.fromRGB(45, 135, 175), 30)
@@ -2971,7 +2975,7 @@ do
     Hub.Fn.connect(ToggleFarmBtn.MouseButton1Click, function()
         State.isFarming = not State.isFarming
         ToggleFarmBtn.Text = State.isFarming and "⏸ Stop Auto Herbs" or "🌿 Start Auto Herbs (Safe Speed + Chase x2)"
-        ToggleFarmBtn.BackgroundColor3 = State.isFarming and Color3.fromRGB(200, 120, 30) or Color3.fromRGB(40, 160, 80)
+        ToggleFarmBtn.BackgroundColor3 = State.isFarming and Color3.fromRGB(200, 120, 30) or Color3.fromRGB(40, 140, 80)
         Hub.Fn.setWorker("startFarmLoop", State.isFarming, Hub.Fn.startFarmLoop)
     end)
     Hub.Fn.connect(ToggleHerbModeBtn.MouseButton1Click, function()
@@ -3080,5 +3084,5 @@ do
 
     Hub.Fn.setWorker("startDynamicStreamLoop", State.isDynamicStream, Hub.Fn.startDynamicStreamLoop)
     Hub.Fn.rebuildMobListUI()
-    Hub.Fn.logDebug("พร้อมใช้งาน V36.1! (Anti-AFK + Spirit Catch Only)")
+    Hub.Fn.logDebug("พร้อมใช้งาน V36.1 [Full + Safe Speed 75] เรียบร้อย!")
 end
